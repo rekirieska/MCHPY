@@ -41,32 +41,30 @@ class TemperatureConversionTests(unittest.TestCase):
 
     def test_freezing_point(self):
         result = self.app.convert_temperature(
-            Decimal("0"), "Цельсий (°C)", "Фаренгейт (°F)"
+            Decimal(0), "Цельсий (°C)", "Фаренгейт (°F)"
         )
-        self.assertEqual(result, Decimal("32"))
+        self.assertEqual(result, Decimal(32))
 
     def test_boiling_point(self):
         result = self.app.convert_temperature(
-            Decimal("100"), "Цельсий (°C)", "Фаренгейт (°F)"
+            Decimal(100), "Цельсий (°C)", "Фаренгейт (°F)"
         )
-        self.assertEqual(result, Decimal("212"))
+        self.assertEqual(result, Decimal(212))
 
     def test_minus_40_equal_scales(self):
         result = self.app.convert_temperature(
-            Decimal("-40"), "Цельсий (°C)", "Фаренгейт (°F)"
+            Decimal(-40), "Цельсий (°C)", "Фаренгейт (°F)"
         )
-        self.assertEqual(result, Decimal("-40"))
+        self.assertEqual(result, Decimal(-40))
 
     def test_absolute_zero(self):
-        result = self.app.convert_temperature(
-            Decimal("0"), "Кельвин (K)", "Цельсий (°C)"
-        )
+        result = self.app.convert_temperature(Decimal(0), "Кельвин (K)", "Цельсий (°C)")
         self.assertEqual(result, Decimal("-273.15"))
 
     def test_body_temperature_exact_decimal(self):
         # 37 °C = 98.6 °F точно в Decimal; float дал бы ~98.59999999999999
         result = self.app.convert_temperature(
-            Decimal("37"), "Цельсий (°C)", "Фаренгейт (°F)"
+            Decimal(37), "Цельсий (°C)", "Фаренгейт (°F)"
         )
         self.assertEqual(result, Decimal("98.6"))
         self.assertIsInstance(result, Decimal)
