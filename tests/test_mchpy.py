@@ -776,5 +776,262 @@ class HistoryFileTests(unittest.TestCase):
         self.app._redraw_history.assert_called_once()
 
 
+class HelperFunctionsTests(unittest.TestCase):
+    """Проверка вспомогательных функций модуля."""
+
+    def test_system_user_returns_username(self):
+        with patch("mchpy.getpass.getuser", return_value="vera"):
+            self.assertEqual(mchpy._system_user(), "vera")
+
+    def test_system_user_returns_fallback_for_empty_username(self):
+        with patch("mchpy.getpass.getuser", return_value=""):
+            self.assertEqual(mchpy._system_user(), "user")
+
+    def test_system_user_returns_fallback_on_os_error(self):
+        with patch("mchpy.getpass.getuser", side_effect=OSError):
+            self.assertEqual(mchpy._system_user(), "user")
+
+    def test_system_user_returns_fallback_on_import_error(self):
+        with patch("mchpy.getpass.getuser", side_effect=ImportError):
+            self.assertEqual(mchpy._system_user(), "user")
+
+    def test_safe_part_keeps_valid_characters(self):
+        self.assertEqual(mchpy._safe_part("user_123-test"), "user_123-test")
+
+    def test_safe_part_removes_special_characters(self):
+        self.assertEqual(mchpy._safe_part("user name!@#"), "username")
+
+    def test_safe_part_returns_fallback_for_empty_result(self):
+        self.assertEqual(mchpy._safe_part("!@#$%^&*"), "user")
+
+    def test_unit_label_extracts_text_from_parentheses(self):
+        self.assertEqual(mchpy._unit_label("Метр (m)"), "m")
+
+    def test_unit_label_uses_last_parentheses(self):
+        self.assertEqual(mchpy._unit_label("Единица (описание) (unit)"), "unit")
+
+    def test_unit_label_returns_original_text_without_parentheses(self):
+        self.assertEqual(mchpy._unit_label("Метр"), "Метр")
+
+
+class BaseUnitNameTests(unittest.TestCase):
+    """Проверка определения базовой единицы."""
+
+    def setUp(self):
+        self.app = make_app()
+
+    def test_returns_first_unit_with_coefficient_one(self):
+        units = {
+            "километр": 1000.0,
+            "метр": 1.0,
+            "сантиметр": 0.01,
+        }
+
+        self.assertEqual(self.app._base_unit_name(units), "метр")
+
+    def test_returns_first_matching_unit(self):
+        units = {
+            "метр": 1.0,
+            "условная единица": 1.0,
+        }
+
+        self.assertEqual(self.app._base_unit_name(units), "метр")
+
+    def test_returns_fallback_when_no_base_unit_exists(self):
+        units = {
+            "километр": 1000.0,
+            "сантиметр": 0.01,
+        }
+
+        self.assertEqual(
+            self.app._base_unit_name(units),
+            "базовая единица",
+        )
+
+    def test_ignores_invalid_coefficient(self):
+        units = {
+            "ошибочная единица": "invalid",
+            "метр": 1.0,
+        }
+
+        self.assertEqual(self.app._base_unit_name(units), "метр")
+
+
+class UpdateUnitsTests(unittest.TestCase):
+    """Проверка обновления списков единиц измерения."""
+
+    def setUp(self):
+        self.app = make_app(
+            conversion={
+                "Длина": {
+                    "units": {
+                        "метр": 1.0,
+                        "километр": 1000.0,
+                    }
+                }
+            },
+            temperature={
+                "units": {
+                    "celsius": "Цельсий (°C)",
+                    "fahrenheit": "Фаренгейт (°F)",
+                }
+            },
+            money_units={
+                "USD": 1.0,
+                "EUR": 0.9,
+            },
+        )
+
+        self.app.category_combo = MagicMock()
+        self.app.from_unit_combo = MagicMock()
+        self.app.to_unit_combo = MagicMock()
+
+    def test_update_length_units(self):
+        self.app.category_combo.get.return_value = "Длина"
+
+        self.app.update_units()
+
+        self.app.from_unit_combo.__setitem__.assert_called_once_with(
+            "values",
+            ["метр", "километр"],
+        )
+        self.app.to_unit_combo.__setitem__.assert_called_once_with(
+            "values",
+            ["метр", "километр"],
+        )
+        self.app.from_unit_combo.current.assert_called_once_with(0)
+        self.app.to_unit_combo.current.assert_called_once_with(1)
+
+    def test_update_temperature_units(self):
+        self.app.category_combo.get.return_value = self.app.TEMP_CAT
+
+        self.app.update_units()
+
+        expected = ["Цельсий (°C)", "Фаренгейт (°F)"]
+
+        self.app.from_unit_combo.__setitem__.assert_called_once_with(
+            "values",
+            expected,
+        )
+        self.app.to_unit_combo.__setitem__.assert_called_once_with(
+            "values",
+            expected,
+        )
+
+    def test_update_currency_units(self):
+        self.app.category_combo.get.return_value = self.app.MONEY_CAT
+
+        self.app.update_units()
+
+        expected = ["USD", "EUR"]
+
+        self.app.from_unit_combo.__setitem__.assert_called_once_with(
+            "values",
+            expected,
+        )
+        self.app.to_unit_combo.__setitem__.assert_called_once_with(
+            "values",
+            expected,
+        )
+
+    def test_update_units_with_one_unit(self):
+        self.app.conversion_factors = {"Длина": {"units": {"метр": 1.0}}}
+        self.app.category_combo.get.return_value = "Длина"
+
+        self.app.update_units()
+
+        self.app.from_unit_combo.current.assert_called_once_with(0)
+        self.app.to_unit_combo.current.assert_called_once_with(0)
+
+    def test_update_units_with_empty_category(self):
+        self.app.conversion_factors = {"Длина": {"units": {}}}
+        self.app.category_combo.get.return_value = "Длина"
+
+        self.app.update_units()
+
+        self.app.from_unit_combo.__setitem__.assert_called_once_with(
+            "values",
+            [],
+        )
+        self.app.to_unit_combo.__setitem__.assert_called_once_with(
+            "values",
+            [],
+        )
+        self.app.from_unit_combo.current.assert_not_called()
+        self.app.to_unit_combo.current.assert_not_called()
+
+
+class RefreshUnitsAfterTests(unittest.TestCase):
+    """Проверка обновления списков после изменения пользовательских единиц."""
+
+    def setUp(self):
+        self.app = make_app(
+            conversion={
+                "Длина": {
+                    "units": {
+                        "метр": 1.0,
+                        "километр": 1000.0,
+                        "Тестовая единица": 2.0,
+                    }
+                }
+            }
+        )
+
+        self.app.category_combo = MagicMock()
+        self.app.from_unit_combo = MagicMock()
+        self.app.to_unit_combo = MagicMock()
+
+    def test_refresh_units_after_selects_requested_unit(self):
+        self.app.category_combo.get.return_value = "Длина"
+
+        self.app._refresh_units_after("Длина", "Тестовая единица")
+
+        self.app.to_unit_combo.current.assert_called_once_with(2)
+        self.app.from_unit_combo.current.assert_not_called()
+
+    def test_refresh_units_after_uses_default_selection(self):
+        self.app.category_combo.get.return_value = "Длина"
+
+        self.app._refresh_units_after("Длина")
+
+        self.app.from_unit_combo.current.assert_called_once_with(0)
+        self.app.to_unit_combo.current.assert_called_once_with(1)
+
+    def test_refresh_units_after_ignores_another_category(self):
+        self.app.category_combo.get.return_value = "Масса"
+
+        self.app._refresh_units_after("Длина")
+
+        self.app.from_unit_combo.__setitem__.assert_not_called()
+        self.app.to_unit_combo.__setitem__.assert_not_called()
+        self.app.from_unit_combo.current.assert_not_called()
+        self.app.to_unit_combo.current.assert_not_called()
+
+    def test_refresh_units_after_ignores_unknown_selected_unit(self):
+        self.app.category_combo.get.return_value = "Длина"
+
+        self.app._refresh_units_after("Длина", "Несуществующая единица")
+
+        self.app.from_unit_combo.current.assert_called_once_with(0)
+        self.app.to_unit_combo.current.assert_called_once_with(1)
+
+    def test_refresh_units_after_handles_empty_unit_list(self):
+        self.app.conversion_factors["Длина"]["units"] = {}
+        self.app.category_combo.get.return_value = "Длина"
+
+        self.app._refresh_units_after("Длина")
+
+        self.app.from_unit_combo.__setitem__.assert_called_once_with(
+            "values",
+            [],
+        )
+        self.app.to_unit_combo.__setitem__.assert_called_once_with(
+            "values",
+            [],
+        )
+        self.app.from_unit_combo.current.assert_not_called()
+        self.app.to_unit_combo.current.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()
