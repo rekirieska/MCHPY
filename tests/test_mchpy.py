@@ -534,5 +534,247 @@ class LoadAllDataTests(unittest.TestCase):
         self.assertIn("conversion.json", showerror.call_args.args[1])
 
 
+class CurrencyRateUpdateTests(unittest.TestCase):
+    def setUp(self):
+        self.app = make_app()
+        self.app.root = MagicMock()
+        self.app.base_dir = tempfile.mkdtemp()
+        self.addCleanup(lambda: __import__("shutil").rmtree(self.app.base_dir))
+
+    def _mock_response(self, payload):
+        response = MagicMock()
+        response.__enter__.return_value.read.return_value = mchpy.json.dumps(
+            payload
+        ).encode("utf-8")
+        return response
+
+    def test_refresh_rates_success(self):
+        rates = {"USD": 1, "EUR": 0.9}
+        response = self._mock_response({"rates": rates})
+
+        with patch("mchpy.urllib.request.urlopen", return_value=response):
+            self.app._refresh_rates()
+
+        self.app.root.after.assert_called_once_with(
+            0, self.app._apply_remote_rates, rates
+        )
+
+    def test_refresh_rates_without_rates(self):
+        response = self._mock_response({"message": "No rates"})
+
+        with patch("mchpy.urllib.request.urlopen", return_value=response):
+            self.app._refresh_rates()
+
+        self.app.root.after.assert_not_called()
+
+    def test_refresh_rates_with_empty_rates(self):
+        response = self._mock_response({"rates": {}})
+
+        with patch("mchpy.urllib.request.urlopen", return_value=response):
+            self.app._refresh_rates()
+
+        self.app.root.after.assert_not_called()
+
+    def test_refresh_rates_with_invalid_json(self):
+        response = MagicMock()
+        response.__enter__.return_value.read.return_value = b"{invalid json}"
+
+        with patch("mchpy.urllib.request.urlopen", return_value=response):
+            self.app._refresh_rates()
+
+        self.app.root.after.assert_not_called()
+
+    def test_refresh_rates_network_error(self):
+        with patch(
+            "mchpy.urllib.request.urlopen",
+            side_effect=urllib.error.URLError("Connection failed"),
+        ):
+            self.app._refresh_rates()
+
+        self.app.root.after.assert_not_called()
+
+    def test_apply_remote_rates_saves_cache(self):
+        rates = {"USD": 1, "EUR": 0.9}
+        self.app.category_combo = MagicMock()
+        self.app.category_combo.__getitem__.return_value = ["Длина"]
+
+        with patch("mchpy.time.time", return_value=123456):
+            self.app._apply_remote_rates(rates)
+
+        self.assertEqual(self.app.money_data, {"units": rates})
+
+        cache_path = os.path.join(
+            self.app.base_dir,
+            self.app.RATES_CACHE_FILENAME,
+        )
+        cache = mchpy._read_json(cache_path)
+
+        self.assertEqual(
+            cache,
+            {
+                "timestamp": 123456,
+                "data": {"units": rates},
+            },
+        )
+
+    def test_apply_remote_rates_adds_currency_category(self):
+        self.app.category_combo = MagicMock()
+        self.app.category_combo.__getitem__.return_value = ["Длина"]
+
+        self.app._apply_remote_rates({"USD": 1, "EUR": 0.9})
+
+        self.app.category_combo.__setitem__.assert_called_once_with(
+            "values",
+            ["Длина", self.app.MONEY_CAT],
+        )
+
+    def test_apply_remote_rates_updates_selected_currency(self):
+        self.app.category_combo = MagicMock()
+        self.app.category_combo.__getitem__.return_value = [
+            self.app.MONEY_CAT,
+            "Длина",
+        ]
+        self.app.category_combo.get.return_value = self.app.MONEY_CAT
+        self.app.update_units = MagicMock()
+
+        self.app._apply_remote_rates({"USD": 1, "EUR": 0.9})
+
+        self.app.update_units.assert_called_once()
+
+
+class HistoryFileTests(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp_dir.cleanup)
+
+        self.app = make_app()
+        self.app.history_file = os.path.join(
+            self.temp_dir.name,
+            "history.txt",
+        )
+
+    def test_ensure_history_file_creates_file(self):
+        self.app.ensure_history_file()
+
+        self.assertTrue(os.path.exists(self.app.history_file))
+
+    def test_ensure_history_file_keeps_existing_file(self):
+        with open(self.app.history_file, "w", encoding="utf-8") as file:
+            file.write("Существующая запись")
+
+        self.app.ensure_history_file()
+
+        with open(self.app.history_file, encoding="utf-8") as file:
+            self.assertEqual(file.read(), "Существующая запись")
+
+    def test_load_history_reads_records(self):
+        records = ["Запись 1", "Запись 2", "Запись 3"]
+
+        with open(self.app.history_file, "w", encoding="utf-8") as file:
+            file.write("\n".join(records))
+
+        self.app.load_history()
+
+        self.assertEqual(self.app.history_lines, records)
+
+    def test_load_history_ignores_empty_lines(self):
+        with open(self.app.history_file, "w", encoding="utf-8") as file:
+            file.write("Запись 1\n\n   \nЗапись 2\n")
+
+        self.app.load_history()
+
+        self.assertEqual(
+            self.app.history_lines,
+            ["Запись 1", "Запись 2"],
+        )
+
+    def test_load_history_keeps_only_last_500_records(self):
+        records = [f"Запись {i}" for i in range(600)]
+
+        with open(self.app.history_file, "w", encoding="utf-8") as file:
+            file.write("\n".join(records))
+
+        self.app.load_history()
+
+        self.assertEqual(len(self.app.history_lines), 500)
+        self.assertEqual(self.app.history_lines[0], "Запись 100")
+        self.assertEqual(self.app.history_lines[-1], "Запись 599")
+
+    def test_load_history_missing_file(self):
+        self.app.history_lines = ["Старая запись"]
+
+        self.app.load_history()
+
+        self.assertEqual(self.app.history_lines, [])
+
+    def test_save_history_writes_records(self):
+        self.app.history_lines = ["Запись 1", "Запись 2"]
+        self.app.save_history = mchpy.MCHPYApp.save_history.__get__(
+            self.app,
+            mchpy.MCHPYApp,
+        )
+
+        self.app.save_history()
+
+        with open(self.app.history_file, encoding="utf-8") as file:
+            self.assertEqual(file.read(), "Запись 1\nЗапись 2\n")
+
+    def test_add_to_history_adds_record_and_updates_interface(self):
+        self.app._redraw_history = MagicMock()
+
+        self.app.add_to_history("1 м = 100 см")
+
+        self.assertEqual(
+            self.app.history_lines,
+            ["• 1 м = 100 см"],
+        )
+        self.app.save_history.assert_called_once()
+        self.app._redraw_history.assert_called_once()
+
+    def test_add_to_history_respects_limit(self):
+        self.app.history_lines = [f"Запись {i}" for i in range(self.app.MAX_HISTORY)]
+
+        self.app.add_to_history("Новая запись")
+
+        self.assertEqual(len(self.app.history_lines), 500)
+        self.assertEqual(self.app.history_lines[-1], "• Новая запись")
+        self.assertEqual(self.app.history_lines[0], "Запись 1")
+
+    def test_clear_history_when_empty(self):
+        with patch.object(mchpy.messagebox, "showinfo") as showinfo:
+            self.app.clear_history()
+
+        showinfo.assert_called_once()
+        self.app.save_history.assert_not_called()
+
+    def test_clear_history_when_user_cancels(self):
+        self.app.history_lines = ["Запись 1"]
+
+        with patch.object(
+            mchpy.messagebox,
+            "askyesno",
+            return_value=False,
+        ):
+            self.app.clear_history()
+
+        self.assertEqual(self.app.history_lines, ["Запись 1"])
+        self.app.save_history.assert_not_called()
+
+    def test_clear_history_when_user_confirms(self):
+        self.app.history_lines = ["Запись 1", "Запись 2"]
+        self.app._redraw_history = MagicMock()
+
+        with patch.object(
+            mchpy.messagebox,
+            "askyesno",
+            return_value=True,
+        ):
+            self.app.clear_history()
+
+        self.assertEqual(self.app.history_lines, [])
+        self.app.save_history.assert_called_once()
+        self.app._redraw_history.assert_called_once()
+
+
 if __name__ == "__main__":
     unittest.main()
