@@ -2,8 +2,9 @@ import unittest
 import urllib.error
 from decimal import Decimal
 from unittest.mock import MagicMock, patch
-
+import tempfile
 import mchpy
+import os
 
 
 def make_app(money_units=None, conversion=None, temperature=None):
@@ -167,6 +168,205 @@ class RefreshRatesTests(unittest.TestCase):
             app._refresh_rates()
 
         app.root.after.assert_not_called()
+
+
+class CustomUnitTests(unittest.TestCase):
+    def setUp(self):
+        self.app = make_app(
+            conversion={"Длина": {"units": {"метр": 1.0, "Тестовая единица": 2.0}}}
+        )
+
+    def _run(self, value, from_u, to_u):
+        set_widgets(self.app, "Длина", value, from_u, to_u)
+        self.app.convert()
+        self.assertEqual(len(self.app.history_lines), 1)
+        return self.app.history_lines[0]
+
+    def test_meter_to_custom_unit(self):
+        line = self._run("-1", "метр", "Тестовая единица")
+        self.assertIn("-0.5", line)
+
+    def test_custom_unit_to_meter(self):
+        line = self._run("2", "Тестовая единица", "метр")
+        self.assertIn("4", line)
+
+    def test_custom_unit_zero_conversion(self):
+        line = self._run("0", "метр", "Тестовая единица")
+        self.assertIn("= 0", line)
+
+    def test_custom_unit_fractional_conversion(self):
+        line = self._run("1", "метр", "Тестовая единица")
+        self.assertIn("0.5", line)
+
+
+class CustomUnitValidationTests(unittest.TestCase):
+    def test_valid_custom_unit(self):
+        name, coef = mchpy.MCHPYApp._validate_custom_unit(" Тестовая единица ", "2")
+        self.assertEqual(name, "Тестовая единица")
+        self.assertEqual(coef, Decimal("2"))
+
+    def test_empty_name(self):
+        with self.assertRaisesRegex(ValueError, "Введите название"):
+            mchpy.MCHPYApp._validate_custom_unit("", "2")
+
+    def test_reserved_category_name(self):
+        with self.assertRaisesRegex(ValueError, "Недопустимое название"):
+            mchpy.MCHPYApp._validate_custom_unit("Валюта", "2")
+
+    def test_non_numeric_coefficient(self):
+        with self.assertRaisesRegex(ValueError, "должен быть числом"):
+            mchpy.MCHPYApp._validate_custom_unit("Тестовая", "abc")
+
+    def test_zero_coefficient(self):
+        with self.assertRaisesRegex(ValueError, "больше 0"):
+            mchpy.MCHPYApp._validate_custom_unit("Тестовая", "0")
+
+    def test_negative_coefficient(self):
+        with self.assertRaisesRegex(ValueError, "больше 0"):
+            mchpy.MCHPYApp._validate_custom_unit("Тестовая", "-2")
+
+    def test_infinite_coefficient(self):
+        with self.assertRaisesRegex(ValueError, "больше 0"):
+            mchpy.MCHPYApp._validate_custom_unit("Тестовая", "Infinity")
+
+
+class CustomUnitManagementTests(unittest.TestCase):
+    def setUp(self):
+        self.app = make_app(
+            conversion={
+                "Длина": {
+                    "units": {
+                        "метр": 1.0,
+                        "километр": 1000.0,
+                        "Тестовая единица": 2.0,
+                    }
+                }
+            }
+        )
+
+    def test_create_custom_unit(self):
+        self.app._save_conversion_factors = MagicMock()
+
+        self.app._save_custom_unit("Длина", "Новая единица", Decimal("5"))
+
+        units = self.app.conversion_factors["Длина"]["units"]
+
+        self.assertEqual(units["Новая единица"], 5.0)
+        self.app._save_conversion_factors.assert_called_once()
+
+    def test_update_existing_custom_unit(self):
+        self.app._save_conversion_factors = MagicMock()
+
+        self.app._save_custom_unit("Длина", "Тестовая единица", Decimal("3"))
+
+        units = self.app.conversion_factors["Длина"]["units"]
+
+        self.assertEqual(units["Тестовая единица"], 3.0)
+        self.assertEqual(len(units), 3)
+        self.app._save_conversion_factors.assert_called_once()
+
+    def test_delete_custom_unit(self):
+        self.app._save_conversion_factors = MagicMock()
+
+        result = self.app._delete_custom_unit("Длина", "Тестовая единица")
+
+        units = self.app.conversion_factors["Длина"]["units"]
+
+        self.assertTrue(result)
+        self.assertNotIn("Тестовая единица", units)
+        self.assertEqual(len(units), 2)
+        self.app._save_conversion_factors.assert_called_once()
+
+    def test_delete_unknown_unit(self):
+        self.app._save_conversion_factors = MagicMock()
+
+        result = self.app._delete_custom_unit("Длина", "Несуществующая единица")
+
+        self.assertFalse(result)
+        self.app._save_conversion_factors.assert_not_called()
+
+    def test_cannot_delete_last_unit(self):
+        self.app.conversion_factors["Длина"]["units"] = {"метр": 1.0}
+        self.app._save_conversion_factors = MagicMock()
+
+        result = self.app._delete_custom_unit("Длина", "метр")
+
+        self.assertFalse(result)
+        self.assertIn("метр", self.app.conversion_factors["Длина"]["units"])
+        self.app._save_conversion_factors.assert_not_called()
+
+
+class CustomUnitPersistenceTests(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp_dir.cleanup)
+
+        self.base_dir = self.temp_dir.name
+
+        initial_data = {
+            "Длина": {
+                "units": {
+                    "метр": 1.0,
+                    "километр": 1000.0,
+                }
+            }
+        }
+
+        mchpy._write_json(
+            os.path.join(self.base_dir, "conversion.json"),
+            initial_data,
+        )
+        mchpy._write_json(
+            os.path.join(self.base_dir, "temperature.json"),
+            {"units": {}},
+        )
+        mchpy._write_json(
+            os.path.join(self.base_dir, "money.json"),
+            {"units": {}},
+        )
+
+        self.app = make_app(conversion=initial_data)
+        self.app.base_dir = self.base_dir
+
+    def _reload_app(self):
+        """Создаёт экземпляр приложения и загружает данные из файлов."""
+        app = mchpy.MCHPYApp.__new__(mchpy.MCHPYApp)
+        app.base_dir = self.base_dir
+        app.load_all_data()
+        return app
+
+    def test_created_unit_is_saved_and_loaded(self):
+        self.app._save_custom_unit("Длина", "Тестовая единица", Decimal("2"))
+
+        reloaded_app = self._reload_app()
+
+        units = reloaded_app.conversion_factors["Длина"]["units"]
+
+        self.assertEqual(units["Тестовая единица"], 2.0)
+
+    def test_updated_coefficient_is_saved_and_loaded(self):
+        self.app._save_custom_unit("Длина", "километр", Decimal("1500"))
+
+        reloaded_app = self._reload_app()
+
+        units = reloaded_app.conversion_factors["Длина"]["units"]
+
+        self.assertEqual(units["километр"], 1500.0)
+
+    def test_deleted_unit_is_removed_from_file(self):
+        self.app._save_custom_unit("Длина", "Тестовая единица", Decimal("2"))
+
+        result = self.app._delete_custom_unit("Длина", "Тестовая единица")
+
+        self.assertTrue(result)
+
+        reloaded_app = self._reload_app()
+
+        units = reloaded_app.conversion_factors["Длина"]["units"]
+
+        self.assertNotIn("Тестовая единица", units)
+        self.assertIn("метр", units)
+        self.assertIn("километр", units)
 
 
 if __name__ == "__main__":
