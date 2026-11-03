@@ -1,10 +1,11 @@
+import os
+import tempfile
 import unittest
 import urllib.error
 from decimal import Decimal
 from unittest.mock import MagicMock, patch
-import tempfile
+
 import mchpy
-import os
 
 
 def make_app(money_units=None, conversion=None, temperature=None):
@@ -203,7 +204,7 @@ class CustomUnitValidationTests(unittest.TestCase):
     def test_valid_custom_unit(self):
         name, coef = mchpy.MCHPYApp._validate_custom_unit(" Тестовая единица ", "2")
         self.assertEqual(name, "Тестовая единица")
-        self.assertEqual(coef, Decimal("2"))
+        self.assertEqual(coef, Decimal(2))
 
     def test_empty_name(self):
         with self.assertRaisesRegex(ValueError, "Введите название"):
@@ -247,7 +248,7 @@ class CustomUnitManagementTests(unittest.TestCase):
     def test_create_custom_unit(self):
         self.app._save_conversion_factors = MagicMock()
 
-        self.app._save_custom_unit("Длина", "Новая единица", Decimal("5"))
+        self.app._save_custom_unit("Длина", "Новая единица", Decimal(5))
 
         units = self.app.conversion_factors["Длина"]["units"]
 
@@ -257,7 +258,7 @@ class CustomUnitManagementTests(unittest.TestCase):
     def test_update_existing_custom_unit(self):
         self.app._save_conversion_factors = MagicMock()
 
-        self.app._save_custom_unit("Длина", "Тестовая единица", Decimal("3"))
+        self.app._save_custom_unit("Длина", "Тестовая единица", Decimal(3))
 
         units = self.app.conversion_factors["Длина"]["units"]
 
@@ -336,7 +337,7 @@ class CustomUnitPersistenceTests(unittest.TestCase):
         return app
 
     def test_created_unit_is_saved_and_loaded(self):
-        self.app._save_custom_unit("Длина", "Тестовая единица", Decimal("2"))
+        self.app._save_custom_unit("Длина", "Тестовая единица", Decimal(2))
 
         reloaded_app = self._reload_app()
 
@@ -345,7 +346,7 @@ class CustomUnitPersistenceTests(unittest.TestCase):
         self.assertEqual(units["Тестовая единица"], 2.0)
 
     def test_updated_coefficient_is_saved_and_loaded(self):
-        self.app._save_custom_unit("Длина", "километр", Decimal("1500"))
+        self.app._save_custom_unit("Длина", "километр", Decimal(1500))
 
         reloaded_app = self._reload_app()
 
@@ -354,7 +355,7 @@ class CustomUnitPersistenceTests(unittest.TestCase):
         self.assertEqual(units["километр"], 1500.0)
 
     def test_deleted_unit_is_removed_from_file(self):
-        self.app._save_custom_unit("Длина", "Тестовая единица", Decimal("2"))
+        self.app._save_custom_unit("Длина", "Тестовая единица", Decimal(2))
 
         result = self.app._delete_custom_unit("Длина", "Тестовая единица")
 
