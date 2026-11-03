@@ -1,4 +1,5 @@
 import unittest
+import urllib.error
 from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
@@ -152,6 +153,20 @@ class InvalidInputTests(unittest.TestCase):
             app.convert()
         self.assertEqual(app.history_lines, [])
         mb.showerror.assert_called_once()
+
+
+class RefreshRatesTests(unittest.TestCase):
+    def test_network_error_does_not_crash(self):
+        app = make_app()
+        app.root = MagicMock()
+
+        with patch(
+            "mchpy.urllib.request.urlopen",
+            side_effect=urllib.error.URLError("Нет соединения"),
+        ):
+            app._refresh_rates()
+
+        app.root.after.assert_not_called()
 
 
 if __name__ == "__main__":
