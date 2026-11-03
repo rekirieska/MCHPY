@@ -4,8 +4,9 @@ import os
 import platform
 import threading
 import time
-import urllib.request
 import tkinter as tk
+import urllib.error
+import urllib.request
 from decimal import Decimal, InvalidOperation
 from tkinter import messagebox, ttk
 
@@ -14,7 +15,7 @@ def _system_user():
     """Имя пользователя ОС (Linux/Windows)"""
     try:
         return getpass.getuser() or "user"
-    except Exception:
+    except (OSError, ImportError):
         return "user"
 
 
@@ -41,7 +42,7 @@ def _read_json(path):
     try:
         with open(path, "r", encoding="utf-8") as f:
             return json.load(f)
-    except Exception:
+    except (OSError, json.JSONDecodeError):
         return None
 
 
@@ -51,7 +52,7 @@ def _write_json(path, data):
         with open(path, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
         return True
-    except Exception:
+    except (OSError, TypeError, ValueError):
         return False
 
 
@@ -202,17 +203,26 @@ class MCHPYApp:
                 )
 
     def _refresh_rates(self):
-        """Обновление окна"""
+        """Обновление курсов валют"""
         try:
             with urllib.request.urlopen(
                 self.RATES_API_URL, timeout=self.RATES_API_TIMEOUT
             ) as resp:
                 payload = json.loads(resp.read().decode("utf-8"))
+
             rates = payload.get("rates")
             if isinstance(rates, dict) and rates.get("USD"):
                 self.root.after(0, self._apply_remote_rates, rates)
-        except Exception:
-            pass
+
+        except (
+            urllib.error.URLError,
+            TimeoutError,
+            OSError,
+            json.JSONDecodeError,
+            UnicodeDecodeError,
+            AttributeError,
+        ):
+            return
 
     def _apply_remote_rates(self, rates):
         """Применяет курсы из API"""
@@ -241,7 +251,7 @@ class MCHPYApp:
             return
         try:
             open(self.history_file, "w", encoding="utf-8").close()
-        except Exception as e:
+        except OSError as e:
             messagebox.showerror("Ошибка", f"Не удалось создать файл истории: {e}")
 
     def load_history(self):
@@ -253,7 +263,7 @@ class MCHPYApp:
             with open(self.history_file, "r", encoding="utf-8") as f:
                 lines = [line.rstrip("\n") for line in f if line.strip()]
             self.history_lines = lines[-self.MAX_HISTORY :]
-        except Exception as e:
+        except OSError as e:
             messagebox.showerror("Ошибка", f"Не удалось прочитать историю: {e}")
 
     def save_history(self):
@@ -264,7 +274,7 @@ class MCHPYApp:
                 text += "\n"
             with open(self.history_file, "w", encoding="utf-8") as f:
                 f.write(text)
-        except Exception as e:
+        except OSError as e:
             messagebox.showerror("Ошибка", f"Не удалось сохранить историю: {e}")
 
     def _redraw_history(self):
