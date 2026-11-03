@@ -370,5 +370,169 @@ class CustomUnitPersistenceTests(unittest.TestCase):
         self.assertIn("километр", units)
 
 
+class JsonFileTests(unittest.TestCase):
+    """Проверка чтения и записи JSON-файлов."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp_dir.cleanup)
+        self.base_dir = self.temp_dir.name
+
+    def test_read_json_success(self):
+        path = os.path.join(self.base_dir, "test.json")
+        expected = {"name": "Тест", "value": 10}
+
+        mchpy._write_json(path, expected)
+
+        result = mchpy._read_json(path)
+
+        self.assertEqual(result, expected)
+
+    def test_read_json_missing_file(self):
+        path = os.path.join(self.base_dir, "missing.json")
+
+        result = mchpy._read_json(path)
+
+        self.assertIsNone(result)
+
+    def test_read_json_invalid_json(self):
+        path = os.path.join(self.base_dir, "invalid.json")
+
+        with open(path, "w", encoding="utf-8") as file:
+            file.write("{invalid json}")
+
+        result = mchpy._read_json(path)
+
+        self.assertIsNone(result)
+
+    def test_read_json_os_error(self):
+        path = os.path.join(self.base_dir, "test.json")
+
+        with open(path, "w", encoding="utf-8") as file:
+            file.write("{}")
+
+        with patch("builtins.open", side_effect=OSError):
+            result = mchpy._read_json(path)
+
+        self.assertIsNone(result)
+
+    def test_write_json_success(self):
+        path = os.path.join(self.base_dir, "test.json")
+        data = {"units": {"метр": 1.0}}
+
+        result = mchpy._write_json(path, data)
+
+        self.assertTrue(result)
+        self.assertEqual(mchpy._read_json(path), data)
+
+    def test_write_json_invalid_data(self):
+        path = os.path.join(self.base_dir, "test.json")
+
+        result = mchpy._write_json(path, {"value": object()})
+
+        self.assertFalse(result)
+
+    def test_write_json_os_error(self):
+        path = os.path.join(self.base_dir, "test.json")
+
+        with patch("builtins.open", side_effect=OSError):
+            result = mchpy._write_json(path, {})
+
+        self.assertFalse(result)
+
+
+class LoadAllDataTests(unittest.TestCase):
+    """Проверка загрузки данных приложения."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp_dir.cleanup)
+        self.base_dir = self.temp_dir.name
+
+        self.app = make_app()
+        self.app.base_dir = self.base_dir
+
+    def _write_data_file(self, filename, data):
+        path = os.path.join(self.base_dir, filename)
+        mchpy._write_json(path, data)
+
+    def test_load_all_data_success(self):
+        conversion = {
+            "Длина": {
+                "units": {
+                    "метр": 1.0,
+                    "километр": 1000.0,
+                }
+            }
+        }
+        temperature = {
+            "units": {
+                "celsius": "Градусы Цельсия (C)",
+                "fahrenheit": "Градусы Фаренгейта (F)",
+            }
+        }
+        money = {
+            "units": {
+                "USD": 1.0,
+                "EUR": 0.9,
+            }
+        }
+
+        self._write_data_file("conversion.json", conversion)
+        self._write_data_file("temperature.json", temperature)
+        self._write_data_file("money.json", money)
+
+        with patch.object(mchpy.messagebox, "showerror") as showerror:
+            self.app.load_all_data()
+
+        self.assertEqual(self.app.conversion_factors, conversion)
+        self.assertEqual(self.app.temperature_data, temperature)
+        self.assertEqual(self.app.money_data, money)
+        showerror.assert_not_called()
+
+    def test_load_all_data_uses_currency_cache(self):
+        conversion = {"Длина": {"units": {"метр": 1.0}}}
+        temperature = {"units": {}}
+        cached_money = {"units": {"USD": 1.0, "EUR": 0.9}}
+
+        self._write_data_file("conversion.json", conversion)
+        self._write_data_file("temperature.json", temperature)
+        self._write_data_file(
+            mchpy.MCHPYApp.RATES_CACHE_FILENAME,
+            {"timestamp": 123456, "data": cached_money},
+        )
+
+        with patch.object(mchpy.messagebox, "showerror") as showerror:
+            self.app.load_all_data()
+
+        self.assertEqual(self.app.money_data, cached_money)
+        self.assertEqual(self.app.conversion_factors, conversion)
+        self.assertEqual(self.app.temperature_data, temperature)
+        showerror.assert_not_called()
+
+    def test_load_all_data_reports_missing_files(self):
+        with patch.object(mchpy.messagebox, "showerror") as showerror:
+            self.app.load_all_data()
+
+        self.assertEqual(self.app.conversion_factors, {})
+        self.assertEqual(self.app.temperature_data, {})
+        self.assertEqual(self.app.money_data, {})
+        self.assertEqual(showerror.call_count, 3)
+
+    def test_load_all_data_reports_invalid_json(self):
+        self._write_data_file("temperature.json", {"units": {}})
+        self._write_data_file("money.json", {"units": {}})
+
+        conversion_path = os.path.join(self.base_dir, "conversion.json")
+        with open(conversion_path, "w", encoding="utf-8") as file:
+            file.write("{invalid json}")
+
+        with patch.object(mchpy.messagebox, "showerror") as showerror:
+            self.app.load_all_data()
+
+        showerror.assert_called_once()
+        self.assertIn("conversion.json", showerror.call_args.args[1])
+
+
 if __name__ == "__main__":
     unittest.main()
