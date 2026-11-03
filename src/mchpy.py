@@ -210,7 +210,10 @@ class MCHPYApp:
             ) as resp:
                 payload = json.loads(resp.read().decode("utf-8"))
 
-            rates = payload.get("rates")
+                if not isinstance(payload, dict):
+                    return
+
+                rates = payload.get("rates")
             if isinstance(rates, dict) and rates.get("USD"):
                 self.root.after(0, self._apply_remote_rates, rates)
 
