@@ -1,4 +1,3 @@
-
 import getpass
 import json
 import os
@@ -8,7 +7,6 @@ import time
 import tkinter as tk
 import urllib.error
 import urllib.request
-
 from decimal import Decimal, InvalidOperation
 from tkinter import messagebox, ttk
 
