@@ -1,20 +1,25 @@
+
 import getpass
 import json
 import os
 import platform
 import threading
 import time
-import urllib.request
 import tkinter as tk
+import urllib.error
+import urllib.request
+
 from decimal import Decimal, InvalidOperation
 from tkinter import messagebox, ttk
+
 
 def _system_user():
     """Имя пользователя ОС (Linux/Windows)"""
     try:
         return getpass.getuser() or "user"
-    except Exception:
+    except (OSError, ImportError):
         return "user"
+
 
 def _data_dir():
     """Каталог данных для текущей ОС"""
@@ -26,9 +31,11 @@ def _data_dir():
         )
     return os.path.join(base, "MCHPY")
 
+
 def _safe_part(name):
     """Фильтрует строку для использования в имени файла"""
     return "".join(c for c in name if c.isalnum() or c in "-_") or "user"
+
 
 def _read_json(path):
     """Читает JSON-файл; None при ошибке или отсутствии"""
@@ -37,8 +44,9 @@ def _read_json(path):
     try:
         with open(path, "r", encoding="utf-8") as f:
             return json.load(f)
-    except Exception:
+    except (OSError, json.JSONDecodeError):
         return None
+
 
 def _write_json(path, data):
     """Пишет JSON-файл; True при успехе"""
@@ -46,12 +54,14 @@ def _write_json(path, data):
         with open(path, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
         return True
-    except Exception:
+    except (OSError, TypeError, ValueError):
         return False
+
 
 def _unit_label(text):
     """«метр (м)» → «м»; без скобок возвращает исходное"""
     return text.split("(")[-1].strip(")") if "(" in text else text
+
 
 class MCHPYApp:
     """GUI-приложение для конвертации единиц, валют и температуры.
@@ -66,6 +76,7 @@ class MCHPYApp:
         money_data (dict): Данные из money.json / API.
         temperature_data (dict): Данные из temperature.json.
     """
+
     MAX_HISTORY = 500
     RATES_API_URL = "https://open.er-api.com/v6/latest/USD"
     RATES_API_TIMEOUT = 3
@@ -84,9 +95,8 @@ class MCHPYApp:
         try:
             os.makedirs(self.history_dir, exist_ok=True)
         except OSError as e:
-            messagebox.showerror(
-                "Ошибка", f"Не удалось создать каталог истории: {e}"
-            )
+            messagebox.showerror("Ошибка", f"Не удалось создать каталог истории: {e}")
+
         self.history_file = os.path.join(
             self.history_dir, f"history_{_safe_part(_system_user())}.txt"
         )
@@ -105,9 +115,9 @@ class MCHPYApp:
         """Создаёт верхнюю панель с кнопкой очистки истории"""
         top_bar = ttk.Frame(self.root, padding=(10, 10, 10, 0))
         top_bar.pack(fill=tk.X)
-        ttk.Button(
-            top_bar, text="Очистить историю", command=self.clear_history
-        ).pack(fill=tk.X)
+        ttk.Button(top_bar, text="Очистить историю", command=self.clear_history).pack(
+            fill=tk.X
+        )
 
     def _build_history_frame(self):
         """Создаёт блок истории операций с полосой прокрутки"""
@@ -130,9 +140,8 @@ class MCHPYApp:
         cf = ttk.Frame(self.root, padding=10)
         cf.pack(fill=tk.X, padx=10, pady=5)
 
-        ttk.Label(cf, text="Категория:").grid(
-            row=0, column=0, sticky=tk.W, pady=5
-        )
+        ttk.Label(cf, text="Категория:").grid(row=0, column=0, sticky=tk.W, pady=5)
+
         self.category_combo = ttk.Combobox(cf, state="readonly", width=28)
         categories = list(self.conversion_factors.keys())
         if self.money_data:
@@ -143,31 +152,27 @@ class MCHPYApp:
         if categories:
             self.category_combo.current(0)
         self.category_combo.grid(row=0, column=1, sticky=tk.EW, pady=5)
-        self.category_combo.bind(
-            "<<ComboboxSelected>>", self.update_units_callback
-        )
+        self.category_combo.bind("<<ComboboxSelected>>", self.update_units_callback)
 
         ttk.Label(cf, text="Значение:").grid(row=1, column=0, sticky=tk.W, pady=5)
         self.input_entry = ttk.Entry(cf, width=30)
         self.input_entry.grid(row=1, column=1, sticky=tk.EW, pady=5)
         self.input_entry.insert(0, "1")
 
-        ttk.Label(cf, text="Из единицы:").grid(
-            row=2, column=0, sticky=tk.W, pady=5
-        )
+        ttk.Label(cf, text="Из единицы:").grid(row=2, column=0, sticky=tk.W, pady=5)
+
         self.from_unit_combo = ttk.Combobox(cf, state="readonly", width=28)
         self.from_unit_combo.grid(row=2, column=1, sticky=tk.EW, pady=5)
 
-        ttk.Label(cf, text="В единицу:").grid(
-            row=3, column=0, sticky=tk.W, pady=5
-        )
+        ttk.Label(cf, text="В единицу:").grid(row=3, column=0, sticky=tk.W, pady=5)
+
         to_frame = ttk.Frame(cf)
         to_frame.grid(row=3, column=1, sticky=tk.EW, pady=5)
         self.to_unit_combo = ttk.Combobox(to_frame, state="readonly", width=24)
         self.to_unit_combo.pack(side=tk.LEFT, fill=tk.X, expand=True)
-        ttk.Button(
-            to_frame, text="+", width=3, command=self.add_custom_unit
-        ).pack(side=tk.LEFT, padx=(4, 0))
+        ttk.Button(to_frame, text="+", width=3, command=self.add_custom_unit).pack(
+            side=tk.LEFT, padx=(4, 0)
+        )
 
         ttk.Button(cf, text="Конвертировать", command=self.convert).grid(
             row=4, column=0, columnspan=2, sticky=tk.EW, pady=(12, 4)
@@ -179,9 +184,8 @@ class MCHPYApp:
         self.money_data = {}
         self.temperature_data = {}
 
-        cache = _read_json(
-            os.path.join(self.base_dir, self.RATES_CACHE_FILENAME)
-        )
+        cache = _read_json(os.path.join(self.base_dir, self.RATES_CACHE_FILENAME))
+
         if cache and cache.get("data", {}).get("units"):
             self.money_data = cache["data"]
 
@@ -198,9 +202,7 @@ class MCHPYApp:
             if data is not None:
                 setattr(self, attr, data)
             elif os.path.exists(path):
-                messagebox.showerror(
-                    "Ошибка", f"Не удалось прочитать файл {filename}"
-                )
+                messagebox.showerror("Ошибка", f"Не удалось прочитать файл {filename}")
             else:
                 messagebox.showerror(
                     "Критическая ошибка",
@@ -208,17 +210,29 @@ class MCHPYApp:
                 )
 
     def _refresh_rates(self):
-        """Обновление окна"""
+        """Обновление курсов валют"""
         try:
             with urllib.request.urlopen(
                 self.RATES_API_URL, timeout=self.RATES_API_TIMEOUT
             ) as resp:
                 payload = json.loads(resp.read().decode("utf-8"))
-            rates = payload.get("rates")
+
+                if not isinstance(payload, dict):
+                    return
+
+                rates = payload.get("rates")
             if isinstance(rates, dict) and rates.get("USD"):
                 self.root.after(0, self._apply_remote_rates, rates)
-        except Exception:
-            pass
+
+        except (
+            urllib.error.URLError,
+            TimeoutError,
+            OSError,
+            json.JSONDecodeError,
+            UnicodeDecodeError,
+            AttributeError,
+        ):
+            return
 
     def _apply_remote_rates(self, rates):
         """Применяет курсы из API"""
@@ -239,9 +253,7 @@ class MCHPYApp:
             os.path.join(self.base_dir, "conversion.json"),
             self.conversion_factors,
         ):
-            messagebox.showerror(
-                "Ошибка", "Не удалось сохранить conversion.json"
-            )
+            messagebox.showerror("Ошибка", "Не удалось сохранить conversion.json")
 
     def ensure_history_file(self):
         """Создаёт пустой файл истории, если его ещё нет"""
@@ -249,10 +261,8 @@ class MCHPYApp:
             return
         try:
             open(self.history_file, "w", encoding="utf-8").close()
-        except Exception as e:
-            messagebox.showerror(
-                "Ошибка", f"Не удалось создать файл истории: {e}"
-            )
+        except OSError as e:
+            messagebox.showerror("Ошибка", f"Не удалось создать файл истории: {e}")
 
     def load_history(self):
         """Читает из файла последние MAX_HISTORY строк истории"""
@@ -262,11 +272,9 @@ class MCHPYApp:
         try:
             with open(self.history_file, "r", encoding="utf-8") as f:
                 lines = [line.rstrip("\n") for line in f if line.strip()]
-            self.history_lines = lines[-self.MAX_HISTORY:]
-        except Exception as e:
-            messagebox.showerror(
-                "Ошибка", f"Не удалось прочитать историю: {e}"
-            )
+            self.history_lines = lines[-self.MAX_HISTORY :]
+        except OSError as e:
+            messagebox.showerror("Ошибка", f"Не удалось прочитать историю: {e}")
 
     def save_history(self):
         """Перезаписывает файл истории текущим содержимым"""
@@ -276,10 +284,8 @@ class MCHPYApp:
                 text += "\n"
             with open(self.history_file, "w", encoding="utf-8") as f:
                 f.write(text)
-        except Exception as e:
-            messagebox.showerror(
-                "Ошибка", f"Не удалось сохранить историю: {e}"
-            )
+        except OSError as e:
+            messagebox.showerror("Ошибка", f"Не удалось сохранить историю: {e}")
 
     def _redraw_history(self):
         """Перерисовывает виджет истории из self.history_lines"""
@@ -301,9 +307,8 @@ class MCHPYApp:
         elif self.MONEY_CAT in cat:
             units = list(self.money_data.get("units", {}).keys())
         else:
-            units = list(
-                self.conversion_factors.get(cat, {}).get("units", {}).keys()
-            )
+            units = list(self.conversion_factors.get(cat, {}).get("units", {}).keys())
+
         self.from_unit_combo["values"] = units
         self.to_unit_combo["values"] = units
         if units:
@@ -314,9 +319,8 @@ class MCHPYApp:
         """Обновляет после изменения списка единиц категории"""
         if self.category_combo.get() != cat:
             return
-        units = list(
-            self.conversion_factors.get(cat, {}).get("units", {}).keys()
-        )
+        units = list(self.conversion_factors.get(cat, {}).get("units", {}).keys())
+
         self.from_unit_combo["values"] = units
         self.to_unit_combo["values"] = units
         if not units:
@@ -340,7 +344,10 @@ class MCHPYApp:
     def _center_on_parent(self, dialog, parent):
         dialog.update_idletasks()
         x = parent.winfo_rootx() + (parent.winfo_width() - dialog.winfo_reqwidth()) // 2
-        y = parent.winfo_rooty() + (parent.winfo_height() - dialog.winfo_reqheight()) // 2
+        y = (
+            parent.winfo_rooty()
+            + (parent.winfo_height() - dialog.winfo_reqheight()) // 2
+        )
         dialog.geometry(f"+{max(x, 0)}+{max(y, 0)}")
 
     def add_custom_unit(self):
@@ -368,16 +375,18 @@ class MCHPYApp:
         frame.pack(fill=tk.BOTH, expand=True)
         frame.grid_rowconfigure(1, minsize=48)
         frame.grid_rowconfigure(3, minsize=20)
-        ttk.Label(frame, text="Название:").grid(
-            row=0, column=0, sticky=tk.W, pady=4
-        )
+        ttk.Label(frame, text="Название:").grid(row=0, column=0, sticky=tk.W, pady=4)
+
         name_var = tk.StringVar()
         name_entry = ttk.Entry(frame, width=32, textvariable=name_var)
         name_entry.grid(row=0, column=1, sticky=tk.EW, pady=4)
         hint_var = tk.StringVar()
         ttk.Label(
-            frame, textvariable=hint_var, foreground="#555555",
-            wraplength=260, justify=tk.LEFT,
+            frame,
+            textvariable=hint_var,
+            foreground="#555555",
+            wraplength=260,
+            justify=tk.LEFT,
         ).grid(row=1, column=1, sticky=tk.NW)
 
         ttk.Label(frame, text=f"Коэффициент от «{base_name}»:").grid(
@@ -388,13 +397,15 @@ class MCHPYApp:
         coef_entry.insert(0, "1")
         err_var = tk.StringVar()
         ttk.Label(
-            frame, textvariable=err_var, foreground="red",
-            wraplength=260, justify=tk.LEFT,
+            frame,
+            textvariable=err_var,
+            foreground="red",
+            wraplength=260,
+            justify=tk.LEFT,
         ).grid(row=3, column=0, columnspan=2, sticky=tk.W)
         btn_frame = ttk.Frame(frame)
-        btn_frame.grid(
-            row=4, column=0, columnspan=2, sticky=tk.EW, pady=(10, 0)
-        )
+        btn_frame.grid(row=4, column=0, columnspan=2, sticky=tk.EW, pady=(10, 0))
+
         btn_frame.columnconfigure(1, weight=1)
 
         def on_name_change(*_):
@@ -458,15 +469,15 @@ class MCHPYApp:
 
         def on_cancel():
             dialog.destroy()
+
         delete_btn = ttk.Button(btn_frame, text="Удалить", command=on_delete)
         delete_btn.grid(row=0, column=0, sticky=tk.W)
         delete_btn.grid_remove()
         ttk.Button(btn_frame, text="Отмена", command=on_cancel).grid(
             row=0, column=2, padx=(6, 0)
         )
-        ttk.Button(btn_frame, text="Сохранить", command=on_ok).grid(
-            row=0, column=3
-        )
+        ttk.Button(btn_frame, text="Сохранить", command=on_ok).grid(row=0, column=3)
+
         name_var.trace_add("write", on_name_change)
         dialog.bind("<Return>", lambda e: on_ok())
         dialog.bind("<Escape>", lambda e: on_cancel())
@@ -491,35 +502,45 @@ class MCHPYApp:
                 result = self.convert_temperature(val, from_u, to_u)
             elif self.MONEY_CAT in cat:
                 rates = self.money_data.get("units", {})
-                result = (
-                    val
-                    / Decimal(str(rates[from_u]))
-                    * Decimal(str(rates[to_u]))
-                )
+                result = val / Decimal(str(rates[from_u])) * Decimal(str(rates[to_u]))
             else:
                 units = self.conversion_factors.get(cat, {}).get("units", {})
-                result = (
-                    val
-                    * Decimal(str(units[from_u]))
-                    / Decimal(str(units[to_u]))
-                )
-            res_str = (
-                f"{val} {_unit_label(from_u)} "
-                f"= {result:.10g} {_unit_label(to_u)}"
-            )
+                result = val * Decimal(str(units[from_u])) / Decimal(str(units[to_u]))
+            res_str = f"{val} {_unit_label(from_u)} = {result:.10g} {_unit_label(to_u)}"
+
             self.add_to_history(res_str)
         except KeyError as e:
             messagebox.showerror("Ошибка", f"Неизвестная единица: {e}")
         except ZeroDivisionError:
             messagebox.showerror("Ошибка", "Деление на ноль")
+        except ValueError as e:
+            messagebox.showerror("Ошибка", str(e))
 
     def convert_temperature(self, val, from_u, to_u):
         """Конвертация температур"""
+        unit_codes = {
+            "C": "C",
+            "°C": "C",
+            "ЦЕЛЬСИЙ": "C",
+            "ЦЕЛЬСИЯ": "C",
+            "ГРАДУСЫ ЦЕЛЬСИЯ": "C",
+            "F": "F",
+            "°F": "F",
+            "ФАРЕНГЕЙТ": "F",
+            "ФАРЕНГЕЙТА": "F",
+            "ГРАДУСЫ ФАРЕНГЕЙТА": "F",
+            "K": "K",
+            "К": "K",
+            "КЕЛЬВИН": "K",
+            "КЕЛЬВИНЫ": "K",
+        }
 
-        f = _unit_label(from_u).strip().upper()
-        t = _unit_label(to_u).strip().upper()
+        from_label = _unit_label(from_u).strip().upper()
+        to_label = _unit_label(to_u).strip().upper()
+        f = unit_codes.get(from_label)
+        t = unit_codes.get(to_label)
 
-        if f not in ("C", "F", "K") or t not in ("C", "F", "K"):
+        if f is None or t is None:
             raise ValueError("Неизвестная единица измерения температуры")
 
         if f == t:
@@ -534,16 +555,15 @@ class MCHPYApp:
 
         if t == "C":
             return c
-        elif t == "F":
+        if t == "F":
             return c * 9 / 5 + 32
-        else:
-            return c + Decimal("273.15")
+        return c + Decimal("273.15")
 
     def add_to_history(self, record):
         """Добавляет запись в память, файл и виджет с учётом лимита"""
         self.history_lines.append("• " + record)
         if len(self.history_lines) > self.MAX_HISTORY:
-            self.history_lines = self.history_lines[-self.MAX_HISTORY:]
+            self.history_lines = self.history_lines[-self.MAX_HISTORY :]
         self.save_history()
         self._redraw_history()
 
@@ -552,13 +572,12 @@ class MCHPYApp:
         if not self.history_lines:
             messagebox.showinfo("История", "История уже пуста.")
             return
-        if not messagebox.askyesno(
-            "Подтверждение", "Очистить всю историю операций?"
-        ):
+        if not messagebox.askyesno("Подтверждение", "Очистить всю историю операций?"):
             return
         self.history_lines = []
         self.save_history()
         self._redraw_history()
+
 
 if __name__ == "__main__":
     root = tk.Tk()
