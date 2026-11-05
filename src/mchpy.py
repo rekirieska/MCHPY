@@ -177,35 +177,75 @@ class MCHPYApp:
         )
 
     def load_all_data(self):
-        """Загружает локальные файлы коэффициентов"""
+        """Загружает локальные файлы коэффициентов."""
         self.conversion_factors = {}
         self.money_data = {}
         self.temperature_data = {}
 
         cache = _read_json(os.path.join(self.base_dir, self.RATES_CACHE_FILENAME))
 
-        if cache and cache.get("data", {}).get("units"):
-            self.money_data = cache["data"]
+        if isinstance(cache, dict):
+            cached_data = cache.get("data")
+            if (
+                isinstance(cached_data, dict)
+                and isinstance(cached_data.get("units"), dict)
+                and cached_data["units"]
+            ):
+                self.money_data = cached_data
 
         targets = [
             ("conversion.json", "conversion_factors"),
             ("temperature.json", "temperature_data"),
         ]
+
         if not self.money_data.get("units"):
             targets.append(("money.json", "money_data"))
 
         for filename, attr in targets:
             path = os.path.join(self.base_dir, filename)
             data = _read_json(path)
-            if data is not None:
-                setattr(self, attr, data)
-            elif os.path.exists(path):
-                messagebox.showerror("Ошибка", f"Не удалось прочитать файл {filename}")
-            else:
+
+            if data is None:
+                if os.path.exists(path):
+                    messagebox.showerror(
+                        "Ошибка",
+                        f"Не удалось прочитать файл {filename}",
+                    )
+                else:
+                    messagebox.showerror(
+                        "Критическая ошибка",
+                        f"Файл '{filename}' не найден!\nОжидаемый путь:\n{path}",
+                    )
+                continue
+
+            if not isinstance(data, dict):
                 messagebox.showerror(
-                    "Критическая ошибка",
-                    f"Файл '{filename}' не найден!\nОжидаемый путь:\n{path}",
+                    "Ошибка",
+                    f"Некорректная структура файла {filename}",
                 )
+                continue
+
+            if filename == "conversion.json":
+                valid_structure = all(
+                    isinstance(category_data, dict)
+                    and isinstance(category_data.get("units"), dict)
+                    for category_data in data.values()
+                )
+
+            elif filename == "temperature.json":
+                valid_structure = isinstance(data.get("units"), dict)
+
+            else:
+                valid_structure = isinstance(data.get("units"), dict)
+
+            if not valid_structure:
+                messagebox.showerror(
+                    "Ошибка",
+                    f"Некорректная структура файла {filename}",
+                )
+                continue
+
+            setattr(self, attr, data)
 
     def _refresh_rates(self):
         """Обновление курсов валют"""
@@ -348,6 +388,58 @@ class MCHPYApp:
         )
         dialog.geometry(f"+{max(x, 0)}+{max(y, 0)}")
 
+    @staticmethod
+    def _validate_custom_unit(name, coefficient):
+        """Проверяет название и коэффициент пользовательской единицы."""
+        name = name.strip()
+
+        if not name:
+            raise ValueError("Введите название.")
+
+        if name in (MCHPYApp.TEMP_CAT, MCHPYApp.MONEY_CAT):
+            raise ValueError("Недопустимое название.")
+
+        try:
+            coef = Decimal(coefficient.strip())
+        except (InvalidOperation, ValueError, AttributeError):
+            raise ValueError("Коэффициент должен быть числом.")
+
+        if not coef.is_finite() or coef <= 0:
+            raise ValueError("Коэффициент должен быть больше 0.")
+
+        return name, coef
+
+    def _save_custom_unit(self, cat, name, coef):
+        """Добавляет пользовательскую единицу или обновляет существующую."""
+        data = self.conversion_factors.setdefault(cat, {})
+        units = data.setdefault("units", {})
+
+        units[name] = float(coef)
+
+        data["units"] = units
+        self.conversion_factors[cat] = data
+
+        self._save_conversion_factors()
+
+    def _delete_custom_unit(self, cat, name):
+        """Удаляет пользовательскую единицу, если в категории остаётся хотя бы одна."""
+        data = self.conversion_factors.get(cat, {})
+        units = data.get("units", {})
+
+        if name not in units:
+            return False
+
+        if len(units) <= 1:
+            return False
+
+        del units[name]
+
+        data["units"] = units
+        self.conversion_factors[cat] = data
+
+        self._save_conversion_factors()
+        return True
+
     def add_custom_unit(self):
         """Диалог добавления/обновления/удаления единицы в текущей категории"""
         cat = self.category_combo.get()
@@ -419,25 +511,15 @@ class MCHPYApp:
                 delete_btn.grid_remove()
 
         def on_ok():
-            name = name_var.get().strip()
-            if not name:
-                err_var.set("Введите название.")
-                return
-            if name in (self.TEMP_CAT, self.MONEY_CAT):
-                err_var.set("Недопустимое название.")
-                return
             try:
-                coef = Decimal(coef_entry.get().strip())
-            except (InvalidOperation, ValueError):
-                err_var.set("Коэффициент должен быть числом.")
+                name, coef = self._validate_custom_unit(
+                    name_var.get(), coef_entry.get()
+                )
+            except ValueError as e:
+                err_var.set(str(e))
                 return
-            if coef <= 0:
-                err_var.set("Коэффициент должен быть больше 0.")
-                return
-            units[name] = float(coef)
-            data["units"] = units
-            self.conversion_factors[cat] = data
-            self._save_conversion_factors()
+
+            self._save_custom_unit(cat, name, coef)
             dialog.destroy()
             self._refresh_units_after(cat, name)
 
@@ -445,23 +527,22 @@ class MCHPYApp:
             name = name_var.get().strip()
             if name not in units:
                 return
-            if len(units) <= 1:
-                messagebox.showwarning(
-                    "Нельзя удалить",
-                    "В категории должна остаться хотя бы одна единица.",
-                    parent=dialog,
-                )
-                return
+
             if not messagebox.askyesno(
                 "Удаление",
                 f"Удалить единицу «{name}» из категории «{cat}»?",
                 parent=dialog,
             ):
                 return
-            del units[name]
-            data["units"] = units
-            self.conversion_factors[cat] = data
-            self._save_conversion_factors()
+
+            if not self._delete_custom_unit(cat, name):
+                messagebox.showwarning(
+                    "Нельзя удалить",
+                    "В категории должна остаться хотя бы одна единица.",
+                    parent=dialog,
+                )
+                return
+
             dialog.destroy()
             self._refresh_units_after(cat)
 
