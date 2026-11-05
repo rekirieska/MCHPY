@@ -1,9 +1,9 @@
 import os
 import tempfile
-from pathlib import Path
 import unittest
 import urllib.error
 from decimal import Decimal
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import mchpy
@@ -1723,13 +1723,13 @@ class AdditionalCoverageTests(unittest.TestCase):
 class TemperatureCoverageTests(unittest.TestCase):
     def test_convert_temperature_celsius_to_celsius(self):
         app = object.__new__(mchpy.MCHPYApp)
-        result = app.convert_temperature(Decimal("25"), "°C", "°C")
-        self.assertEqual(result, Decimal("25"))
+        result = app.convert_temperature(Decimal(25), "°C", "°C")
+        self.assertEqual(result, Decimal(25))
 
     def test_convert_temperature_celsius_to_fahrenheit(self):
         app = object.__new__(mchpy.MCHPYApp)
-        result = app.convert_temperature(Decimal("0"), "°C", "°F")
-        self.assertEqual(result, Decimal("32"))
+        result = app.convert_temperature(Decimal(0), "°C", "°F")
+        self.assertEqual(result, Decimal(32))
 
 
 class InterfaceBuilderTests(unittest.TestCase):
@@ -1796,27 +1796,27 @@ class TemperatureMissingBranchesTests(unittest.TestCase):
 
     def test_celsius_to_fahrenheit(self):
         result = self.app.convert_temperature(
-            Decimal("20"),
+            Decimal(20),
             "Цельсий",
             "Фаренгейт",
         )
 
-        self.assertEqual(result, Decimal("68"))
+        self.assertEqual(result, Decimal(68))
 
     def test_fahrenheit_to_celsius(self):
         result = self.app.convert_temperature(
-            Decimal("68"),
+            Decimal(68),
             "Фаренгейт",
             "Цельсий",
         )
 
-        self.assertEqual(result, Decimal("20"))
+        self.assertEqual(result, Decimal(20))
 
     def test_celsius_to_kelvin(self):
         app = make_app()
 
         result = app.convert_temperature(
-            Decimal("20"),
+            Decimal(20),
             "Цельсий",
             "Кельвин",
         )
@@ -1848,7 +1848,7 @@ class AppInitCoverageTests(unittest.TestCase):
         return app, root, makedirs, showerror, thread
 
     def test_init_success(self):
-        app, root, makedirs, showerror, thread = self._run_init()
+        app, root, makedirs, showerror, thread = self._run_init(None)
 
         root.title.assert_called_once()
         root.geometry.assert_called_once_with("450x600")
@@ -1870,7 +1870,7 @@ class AppInitCoverageTests(unittest.TestCase):
         thread.return_value.start.assert_called_once()
 
     def test_init_directory_error(self):
-        app, root, makedirs, showerror, thread = self._run_init(OSError("Нет доступа"))
+        app, _root, makedirs, showerror, thread = self._run_init(OSError("Нет доступа"))
 
         makedirs.assert_called_once()
         showerror.assert_called_once()
@@ -2147,7 +2147,7 @@ class AddCustomUnitDialogTests(unittest.TestCase):
         with patch.object(self.app, "_save_custom_unit") as save_unit:
             self.buttons["Сохранить"].command()
 
-        save_unit.assert_called_once_with("Длина", "километр", Decimal("1500"))
+        save_unit.assert_called_once_with("Длина", "километр", Decimal(1500))
         self.assertTrue(self.dialog.destroyed)
 
     def test_cancel_button_closes_dialog(self):
@@ -2262,7 +2262,7 @@ class MainEntryPointCoverageTests(unittest.TestCase):
         fake_tk.Tk.return_value = fake_root
         fake_app_class = MagicMock()
 
-        exec(
+        exec(  # noqa: S102
             code,
             {
                 "__name__": "__main__",
