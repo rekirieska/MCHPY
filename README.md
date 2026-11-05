@@ -232,7 +232,7 @@ python -m pytest --cov=mchpy --cov-report=term-missing
 ### Конвертация температуры
 
 Для преобразования температуры используется метод
-`convert_temperature()`.
+`convert_temperature()`
 
 Например, перевод 37 градусов Цельсия в градусы Фаренгейта:
 
