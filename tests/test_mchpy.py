@@ -1,5 +1,6 @@
 import os
 import tempfile
+from pathlib import Path
 import unittest
 import urllib.error
 from decimal import Decimal
@@ -155,6 +156,45 @@ class InvalidInputTests(unittest.TestCase):
             app.convert()
         self.assertEqual(app.history_lines, [])
         mb.showerror.assert_called_once()
+
+    def test_unknown_temperature_unit(self):
+        app = make_app()
+        set_widgets(
+            app,
+            "Температура",
+            "25",
+            "Неизвестная единица",
+            "Кельвин (K)",
+        )
+
+        with patch("mchpy.messagebox") as mb:
+            app.convert()
+
+        self.assertEqual(app.history_lines, [])
+        mb.showerror.assert_called_once_with(
+            "Ошибка",
+            "Неизвестная единица измерения температуры",
+        )
+
+    def test_division_by_zero(self):
+        app = make_app(
+            conversion={
+                "Длина": {
+                    "units": {
+                        "метр": 1.0,
+                        "нулевая единица": 0.0,
+                    }
+                }
+            }
+        )
+        set_widgets(app, "Длина", "10", "метр", "нулевая единица")
+
+        with patch("mchpy.messagebox") as mb:
+            app.convert()
+
+        self.assertEqual(app.history_lines, [])
+        mb.showerror.assert_called_once()
+        self.assertIn("Деление на ноль", mb.showerror.call_args.args[1])
 
 
 class RefreshRatesTests(unittest.TestCase):
@@ -533,6 +573,373 @@ class LoadAllDataTests(unittest.TestCase):
         showerror.assert_called_once()
         self.assertIn("conversion.json", showerror.call_args.args[1])
 
+    def test_load_all_data_ignores_invalid_currency_cache(self):
+        conversion = {"Длина": {"units": {"метр": 1.0}}}
+        temperature = {"units": {}}
+        money = {"units": {"USD": 1.0, "EUR": 0.9}}
+
+        self._write_data_file("conversion.json", conversion)
+        self._write_data_file("temperature.json", temperature)
+        self._write_data_file("money.json", money)
+
+        self._write_data_file(
+            mchpy.MCHPYApp.RATES_CACHE_FILENAME,
+            {"timestamp": 123456, "data": "invalid"},
+        )
+
+        with patch.object(mchpy.messagebox, "showerror") as showerror:
+            self.app.load_all_data()
+
+        self.assertEqual(self.app.conversion_factors, conversion)
+        self.assertEqual(self.app.temperature_data, temperature)
+        self.assertEqual(self.app.money_data, money)
+        showerror.assert_not_called()
+
+    def test_load_all_data_handles_invalid_conversion_structure(self):
+        self._write_data_file("conversion.json", "invalid")
+        self._write_data_file("temperature.json", {"units": {}})
+        self._write_data_file("money.json", {"units": {"USD": 1.0}})
+
+        with patch.object(mchpy.messagebox, "showerror") as showerror:
+            self.app.load_all_data()
+
+        self.assertEqual(self.app.conversion_factors, {})
+        showerror.assert_called_once_with(
+            "Ошибка",
+            "Некорректная структура файла conversion.json",
+        )
+
+    def test_load_all_data_handles_invalid_temperature_structure(self):
+        self._write_data_file("conversion.json", {})
+        self._write_data_file("temperature.json", ["invalid"])
+        self._write_data_file("money.json", {"units": {"USD": 1.0}})
+
+        with patch.object(mchpy.messagebox, "showerror") as showerror:
+            self.app.load_all_data()
+
+        self.assertEqual(self.app.temperature_data, {})
+        showerror.assert_called_once_with(
+            "Ошибка",
+            "Некорректная структура файла temperature.json",
+        )
+
+    def test_load_all_data_ignores_invalid_money_structure(self):
+        conversion = {"Длина": {"units": {"метр": 1.0}}}
+        temperature = {"units": {}}
+
+        self._write_data_file("conversion.json", conversion)
+        self._write_data_file("temperature.json", temperature)
+        self._write_data_file("money.json", "invalid")
+
+        with patch.object(mchpy.messagebox, "showerror") as showerror:
+            self.app.load_all_data()
+
+        self.assertEqual(self.app.conversion_factors, conversion)
+        self.assertEqual(self.app.temperature_data, temperature)
+        self.assertEqual(self.app.money_data, {})
+        showerror.assert_called_once_with(
+            "Ошибка",
+            "Некорректная структура файла money.json",
+        )
+
+    def test_load_all_data_uses_money_file_when_cache_is_empty(self):
+        conversion = {"Длина": {"units": {"метр": 1.0}}}
+        temperature = {"units": {}}
+        money = {"units": {"USD": 1.0, "EUR": 0.9}}
+
+        self._write_data_file("conversion.json", conversion)
+        self._write_data_file("temperature.json", temperature)
+        self._write_data_file("money.json", money)
+
+        self._write_data_file(
+            mchpy.MCHPYApp.RATES_CACHE_FILENAME,
+            {"timestamp": 123456, "data": {"units": {}}},
+        )
+
+        with patch.object(mchpy.messagebox, "showerror") as showerror:
+            self.app.load_all_data()
+
+        self.assertEqual(self.app.conversion_factors, conversion)
+        self.assertEqual(self.app.temperature_data, temperature)
+        self.assertEqual(self.app.money_data, money)
+        showerror.assert_not_called()
+
+    def test_load_all_data_uses_money_file_when_cache_has_no_data(self):
+        conversion = {"Длина": {"units": {"метр": 1.0}}}
+        temperature = {"units": {}}
+        money = {"units": {"USD": 1.0, "EUR": 0.9}}
+
+        self._write_data_file("conversion.json", conversion)
+        self._write_data_file("temperature.json", temperature)
+        self._write_data_file("money.json", money)
+        self._write_data_file(
+            mchpy.MCHPYApp.RATES_CACHE_FILENAME,
+            {"timestamp": 123456},
+        )
+
+        with patch.object(mchpy.messagebox, "showerror") as showerror:
+            self.app.load_all_data()
+
+        self.assertEqual(self.app.conversion_factors, conversion)
+        self.assertEqual(self.app.temperature_data, temperature)
+        self.assertEqual(self.app.money_data, money)
+        showerror.assert_not_called()
+
+    def test_load_all_data_uses_money_file_when_cached_data_is_empty(self):
+        conversion = {"Длина": {"units": {"метр": 1.0}}}
+        temperature = {"units": {}}
+        money = {"units": {"USD": 1.0, "EUR": 0.9}}
+
+        self._write_data_file("conversion.json", conversion)
+        self._write_data_file("temperature.json", temperature)
+        self._write_data_file("money.json", money)
+        self._write_data_file(
+            mchpy.MCHPYApp.RATES_CACHE_FILENAME,
+            {"timestamp": 123456, "data": {}},
+        )
+
+        with patch.object(mchpy.messagebox, "showerror") as showerror:
+            self.app.load_all_data()
+
+        self.assertEqual(self.app.conversion_factors, conversion)
+        self.assertEqual(self.app.temperature_data, temperature)
+        self.assertEqual(self.app.money_data, money)
+        showerror.assert_not_called()
+
+    def test_load_all_data_uses_money_file_when_cached_data_is_null(self):
+        conversion = {"Длина": {"units": {"метр": 1.0}}}
+        temperature = {"units": {}}
+        money = {"units": {"USD": 1.0, "EUR": 0.9}}
+
+        self._write_data_file("conversion.json", conversion)
+        self._write_data_file("temperature.json", temperature)
+        self._write_data_file("money.json", money)
+        self._write_data_file(
+            mchpy.MCHPYApp.RATES_CACHE_FILENAME,
+            {"timestamp": 123456, "data": None},
+        )
+
+        with patch.object(mchpy.messagebox, "showerror") as showerror:
+            self.app.load_all_data()
+
+        self.assertEqual(self.app.conversion_factors, conversion)
+        self.assertEqual(self.app.temperature_data, temperature)
+        self.assertEqual(self.app.money_data, money)
+        showerror.assert_not_called()
+
+    def test_load_all_data_uses_money_file_when_cache_has_no_units(self):
+        conversion = {"Длина": {"units": {"метр": 1.0}}}
+        temperature = {"units": {}}
+        money = {"units": {"USD": 1.0, "EUR": 0.9}}
+
+        self._write_data_file("conversion.json", conversion)
+        self._write_data_file("temperature.json", temperature)
+        self._write_data_file("money.json", money)
+        self._write_data_file(
+            mchpy.MCHPYApp.RATES_CACHE_FILENAME,
+            {"timestamp": 123456, "data": {"timestamp": 123456}},
+        )
+
+        with patch.object(mchpy.messagebox, "showerror") as showerror:
+            self.app.load_all_data()
+
+        self.assertEqual(self.app.conversion_factors, conversion)
+        self.assertEqual(self.app.temperature_data, temperature)
+        self.assertEqual(self.app.money_data, money)
+        showerror.assert_not_called()
+
+    def test_load_all_data_uses_money_file_when_cached_units_are_empty(self):
+        conversion = {"Длина": {"units": {"метр": 1.0}}}
+        temperature = {"units": {}}
+        money = {"units": {"USD": 1.0, "EUR": 0.9}}
+
+        self._write_data_file("conversion.json", conversion)
+        self._write_data_file("temperature.json", temperature)
+        self._write_data_file("money.json", money)
+        self._write_data_file(
+            mchpy.MCHPYApp.RATES_CACHE_FILENAME,
+            {"timestamp": 123456, "data": {"units": {}}},
+        )
+
+        with patch.object(mchpy.messagebox, "showerror") as showerror:
+            self.app.load_all_data()
+
+        self.assertEqual(self.app.conversion_factors, conversion)
+        self.assertEqual(self.app.temperature_data, temperature)
+        self.assertEqual(self.app.money_data, money)
+        showerror.assert_not_called()
+
+    def test_load_all_data_uses_money_file_when_cached_units_are_invalid(self):
+        conversion = {"Длина": {"units": {"метр": 1.0}}}
+        temperature = {"units": {}}
+        money = {"units": {"USD": 1.0, "EUR": 0.9}}
+
+        self._write_data_file("conversion.json", conversion)
+        self._write_data_file("temperature.json", temperature)
+        self._write_data_file("money.json", money)
+        self._write_data_file(
+            mchpy.MCHPYApp.RATES_CACHE_FILENAME,
+            {"timestamp": 123456, "data": {"units": "invalid"}},
+        )
+
+        with patch.object(mchpy.messagebox, "showerror") as showerror:
+            self.app.load_all_data()
+
+        self.assertEqual(self.app.conversion_factors, conversion)
+        self.assertEqual(self.app.temperature_data, temperature)
+        self.assertEqual(self.app.money_data, money)
+        showerror.assert_not_called()
+
+    def test_load_all_data_uses_money_file_when_cached_units_are_list(self):
+        conversion = {"Длина": {"units": {"метр": 1.0}}}
+        temperature = {"units": {}}
+        money = {"units": {"USD": 1.0, "EUR": 0.9}}
+
+        self._write_data_file("conversion.json", conversion)
+        self._write_data_file("temperature.json", temperature)
+        self._write_data_file("money.json", money)
+        self._write_data_file(
+            mchpy.MCHPYApp.RATES_CACHE_FILENAME,
+            {"timestamp": 123456, "data": {"units": ["USD", "EUR"]}},
+        )
+
+        with patch.object(mchpy.messagebox, "showerror") as showerror:
+            self.app.load_all_data()
+
+        self.assertEqual(self.app.conversion_factors, conversion)
+        self.assertEqual(self.app.temperature_data, temperature)
+        self.assertEqual(self.app.money_data, money)
+        showerror.assert_not_called()
+
+    def test_load_all_data_uses_money_file_when_cached_units_are_number(self):
+        conversion = {"Длина": {"units": {"метр": 1.0}}}
+        temperature = {"units": {}}
+        money = {"units": {"USD": 1.0, "EUR": 0.9}}
+
+        self._write_data_file("conversion.json", conversion)
+        self._write_data_file("temperature.json", temperature)
+        self._write_data_file("money.json", money)
+        self._write_data_file(
+            mchpy.MCHPYApp.RATES_CACHE_FILENAME,
+            {"timestamp": 123456, "data": {"units": 123}},
+        )
+
+        with patch.object(mchpy.messagebox, "showerror") as showerror:
+            self.app.load_all_data()
+
+        self.assertEqual(self.app.conversion_factors, conversion)
+        self.assertEqual(self.app.temperature_data, temperature)
+        self.assertEqual(self.app.money_data, money)
+        showerror.assert_not_called()
+
+    def test_load_all_data_uses_money_file_when_cached_units_are_boolean(self):
+        conversion = {"Длина": {"units": {"метр": 1.0}}}
+        temperature = {"units": {}}
+        money = {"units": {"USD": 1.0, "EUR": 0.9}}
+
+        self._write_data_file("conversion.json", conversion)
+        self._write_data_file("temperature.json", temperature)
+        self._write_data_file("money.json", money)
+        self._write_data_file(
+            mchpy.MCHPYApp.RATES_CACHE_FILENAME,
+            {"timestamp": 123456, "data": {"units": True}},
+        )
+
+        with patch.object(mchpy.messagebox, "showerror") as showerror:
+            self.app.load_all_data()
+
+        self.assertEqual(self.app.conversion_factors, conversion)
+        self.assertEqual(self.app.temperature_data, temperature)
+        self.assertEqual(self.app.money_data, money)
+        showerror.assert_not_called()
+
+    def test_load_all_data_uses_money_file_when_cached_units_are_empty_string(self):
+        conversion = {"Длина": {"units": {"метр": 1.0}}}
+        temperature = {"units": {}}
+        money = {"units": {"USD": 1.0, "EUR": 0.9}}
+
+        self._write_data_file("conversion.json", conversion)
+        self._write_data_file("temperature.json", temperature)
+        self._write_data_file("money.json", money)
+        self._write_data_file(
+            mchpy.MCHPYApp.RATES_CACHE_FILENAME,
+            {"timestamp": 123456, "data": {"units": ""}},
+        )
+
+        with patch.object(mchpy.messagebox, "showerror") as showerror:
+            self.app.load_all_data()
+
+        self.assertEqual(self.app.conversion_factors, conversion)
+        self.assertEqual(self.app.temperature_data, temperature)
+        self.assertEqual(self.app.money_data, money)
+        showerror.assert_not_called()
+
+    def test_load_all_data_uses_money_file_when_cached_units_is_empty_dict(self):
+        conversion = {"Длина": {"units": {"метр": 1.0}}}
+        temperature = {"units": {}}
+        money = {"units": {"USD": 1.0, "EUR": 0.9}}
+
+        self._write_data_file("conversion.json", conversion)
+        self._write_data_file("temperature.json", temperature)
+        self._write_data_file("money.json", money)
+        self._write_data_file(
+            mchpy.MCHPYApp.RATES_CACHE_FILENAME,
+            {"timestamp": 123456, "data": {"units": {}}},
+        )
+
+        with patch.object(mchpy.messagebox, "showerror") as showerror:
+            self.app.load_all_data()
+
+        self.assertEqual(self.app.conversion_factors, conversion)
+        self.assertEqual(self.app.temperature_data, temperature)
+        self.assertEqual(self.app.money_data, money)
+        showerror.assert_not_called()
+
+    def test_load_all_data_reports_invalid_conversion_file_structure(self):
+        self._write_data_file("conversion.json", "invalid")
+        self._write_data_file("temperature.json", {"units": {}})
+        self._write_data_file("money.json", {"units": {"USD": 1.0}})
+
+        with patch.object(mchpy.messagebox, "showerror") as showerror:
+            self.app.load_all_data()
+
+        self.assertEqual(self.app.conversion_factors, {})
+        showerror.assert_called_once_with(
+            "Ошибка",
+            "Некорректная структура файла conversion.json",
+        )
+
+    def test_load_all_data_reports_missing_conversion_units(self):
+        self._write_data_file("conversion.json", {"Длина": {"name": "Длина"}})
+        self._write_data_file("temperature.json", {"units": {}})
+        self._write_data_file("money.json", {"units": {"USD": 1.0}})
+
+        with patch.object(mchpy.messagebox, "showerror") as showerror:
+            self.app.load_all_data()
+
+        self.assertEqual(self.app.conversion_factors, {})
+        showerror.assert_called_once_with(
+            "Ошибка",
+            "Некорректная структура файла conversion.json",
+        )
+
+    def test_load_all_data_reports_invalid_temperature_units(self):
+        conversion = {"Длина": {"units": {"метр": 1.0}}}
+
+        self._write_data_file("conversion.json", conversion)
+        self._write_data_file("temperature.json", {"units": "invalid"})
+        self._write_data_file("money.json", {"units": {"USD": 1.0}})
+
+        with patch.object(mchpy.messagebox, "showerror") as showerror:
+            self.app.load_all_data()
+
+        self.assertEqual(self.app.conversion_factors, conversion)
+        self.assertEqual(self.app.temperature_data, {})
+        showerror.assert_any_call(
+            "Ошибка",
+            "Некорректная структура файла temperature.json",
+        )
+
 
 class CurrencyRateUpdateTests(unittest.TestCase):
     def setUp(self):
@@ -641,6 +1048,42 @@ class CurrencyRateUpdateTests(unittest.TestCase):
 
         self.app.update_units.assert_called_once()
 
+    def test_save_conversion_factors_handles_write_error(self):
+        self.app.conversion_factors = {"Длина": {"units": {"метр": 1.0}}}
+
+        with (
+            patch("mchpy._write_json", return_value=False),
+            patch("mchpy.messagebox.showerror") as showerror,
+        ):
+            self.app._save_conversion_factors()
+
+        showerror.assert_called_once_with(
+            "Ошибка",
+            "Не удалось сохранить conversion.json",
+        )
+
+    def test_refresh_rates_without_usd(self):
+        response = self._mock_response({"rates": {"EUR": 0.9, "RUB": 90.0}})
+
+        with patch("mchpy.urllib.request.urlopen", return_value=response):
+            self.app._refresh_rates()
+
+        self.app.root.after.assert_not_called()
+
+    def test_apply_remote_rates_does_not_change_other_selected_category(self):
+        self.app.category_combo = MagicMock()
+        self.app.category_combo.__getitem__.return_value = [
+            "Длина",
+            self.app.MONEY_CAT,
+        ]
+        self.app.category_combo.get.return_value = "Длина"
+        self.app.update_units = MagicMock()
+
+        self.app._apply_remote_rates({"USD": 1, "EUR": 0.9})
+
+        self.app.category_combo.__setitem__.assert_not_called()
+        self.app.update_units.assert_not_called()
+
 
 class HistoryFileTests(unittest.TestCase):
     def setUp(self):
@@ -706,6 +1149,17 @@ class HistoryFileTests(unittest.TestCase):
         self.app.load_history()
 
         self.assertEqual(self.app.history_lines, [])
+
+    def test_load_history_handles_os_error(self):
+        with (
+            patch("mchpy.os.path.exists", return_value=True),
+            patch("builtins.open", side_effect=OSError("Ошибка чтения")),
+            patch("mchpy.messagebox.showerror") as showerror,
+        ):
+            self.app.load_history()
+
+        self.assertEqual(self.app.history_lines, [])
+        showerror.assert_called_once()
 
     def test_save_history_writes_records(self):
         self.app.history_lines = ["Запись 1", "Запись 2"]
@@ -774,6 +1228,16 @@ class HistoryFileTests(unittest.TestCase):
         self.assertEqual(self.app.history_lines, [])
         self.app.save_history.assert_called_once()
         self.app._redraw_history.assert_called_once()
+
+    def test_ensure_history_file_handles_os_error(self):
+        with (
+            patch("mchpy.os.path.exists", return_value=False),
+            patch("builtins.open", side_effect=OSError("Ошибка создания")),
+            patch("mchpy.messagebox.showerror") as showerror,
+        ):
+            self.app.ensure_history_file()
+
+        showerror.assert_called_once()
 
 
 class HelperFunctionsTests(unittest.TestCase):
@@ -1032,6 +1496,781 @@ class RefreshUnitsAfterTests(unittest.TestCase):
         self.app.from_unit_combo.current.assert_not_called()
         self.app.to_unit_combo.current.assert_not_called()
 
+    def test_network_response_with_non_dict_json(self):
+        app = make_app()
+        app.root = MagicMock()
+        response = MagicMock()
+        response.__enter__.return_value.read.return_value = b'["invalid"]'
+
+        with patch("mchpy.urllib.request.urlopen", return_value=response):
+            app._refresh_rates()
+
+        app.root.after.assert_not_called()
+
+
+class DataDirTests(unittest.TestCase):
+    @patch("mchpy.platform.system", return_value="Windows")
+    @patch.dict(os.environ, {"APPDATA": r"C:\Users\Test\AppData\Roaming"}, clear=True)
+    def test_windows_uses_appdata(self, _):
+        result = mchpy._data_dir()
+
+        self.assertEqual(
+            result,
+            os.path.join(r"C:\Users\Test\AppData\Roaming", "MCHPY"),
+        )
+
+    @patch("mchpy.platform.system", return_value="Windows")
+    @patch.dict(os.environ, {}, clear=True)
+    @patch("mchpy.os.path.expanduser", return_value=r"C:\Users\Test")
+    def test_windows_without_appdata_uses_home(self, _, __):
+        result = mchpy._data_dir()
+
+        self.assertEqual(
+            result,
+            os.path.join(r"C:\Users\Test", "MCHPY"),
+        )
+
+    @patch("mchpy.platform.system", return_value="Linux")
+    @patch.dict(os.environ, {"XDG_DATA_HOME": "/home/test/data"}, clear=True)
+    def test_linux_uses_xdg_data_home(self, _):
+        result = mchpy._data_dir()
+
+        self.assertEqual(
+            result,
+            os.path.join("/home/test/data", "MCHPY"),
+        )
+
+    @patch("mchpy.platform.system", return_value="Linux")
+    @patch.dict(os.environ, {}, clear=True)
+    @patch("mchpy.os.path.expanduser", return_value="/home/test")
+    def test_linux_without_xdg_uses_default_directory(self, _, __):
+        result = mchpy._data_dir()
+
+        self.assertEqual(
+            result,
+            os.path.join("/home/test", ".local", "share", "MCHPY"),
+        )
+
+
+class AdditionalHistoryTests(unittest.TestCase):
+    def setUp(self):
+        self.app = make_app()
+        self.app.history_file = "test_history.txt"
+
+    def test_save_history_handles_os_error(self):
+        del self.app.save_history
+        self.app.history_lines = ["Первая запись"]
+
+        with (
+            patch(
+                "builtins.open",
+                side_effect=OSError("Ошибка записи"),
+            ) as mock_open,
+            patch("mchpy.messagebox.showerror") as mock_error,
+        ):
+            self.app.save_history()
+
+        mock_open.assert_called_once_with("test_history.txt", "w", encoding="utf-8")
+        mock_error.assert_called_once()
+
+
+class HistoryRedrawTests(unittest.TestCase):
+    def setUp(self):
+        self.app = make_app()
+        self.app.history_text = MagicMock()
+
+    def test_redraw_history_with_entries(self):
+        self.app.history_lines = ["1 m = 0.001 km", "0 C = 32 F"]
+
+        self.app._redraw_history()
+
+        self.app.history_text.config.assert_any_call(state=mchpy.tk.NORMAL)
+        self.app.history_text.delete.assert_called_once_with("1.0", mchpy.tk.END)
+        self.app.history_text.insert.assert_any_call(mchpy.tk.END, "1 m = 0.001 km\n")
+        self.app.history_text.insert.assert_any_call(mchpy.tk.END, "0 C = 32 F\n")
+        self.app.history_text.see.assert_called_once_with(mchpy.tk.END)
+        self.app.history_text.config.assert_any_call(state=mchpy.tk.DISABLED)
+
+    def test_redraw_empty_history(self):
+        self.app.history_lines = []
+
+        self.app._redraw_history()
+
+        self.app.history_text.delete.assert_called_once_with("1.0", mchpy.tk.END)
+        self.app.history_text.insert.assert_not_called()
+
+
+class UpdateUnitsCallbackTests(unittest.TestCase):
+    def test_callback_calls_update_units(self):
+        app = make_app()
+        app.update_units = MagicMock()
+        event = object()
+
+        app.update_units_callback(event)
+
+        app.update_units.assert_called_once_with()
+
+
+class CenterOnParentTests(unittest.TestCase):
+    def test_dialog_is_centered_on_parent(self):
+        app = make_app()
+        dialog = MagicMock()
+        parent = MagicMock()
+
+        parent.winfo_rootx.return_value = 100
+        parent.winfo_rooty.return_value = 200
+        parent.winfo_width.return_value = 500
+        parent.winfo_height.return_value = 400
+
+        dialog.winfo_reqwidth.return_value = 200
+        dialog.winfo_reqheight.return_value = 100
+
+        app._center_on_parent(dialog, parent)
+
+        dialog.update_idletasks.assert_called_once_with()
+        dialog.geometry.assert_called_once_with("+250+350")
+
+    def test_dialog_coordinates_do_not_go_below_zero(self):
+        app = make_app()
+        dialog = MagicMock()
+        parent = MagicMock()
+
+        parent.winfo_rootx.return_value = 0
+        parent.winfo_rooty.return_value = 0
+        parent.winfo_width.return_value = 100
+        parent.winfo_height.return_value = 80
+
+        dialog.winfo_reqwidth.return_value = 300
+        dialog.winfo_reqheight.return_value = 200
+
+        app._center_on_parent(dialog, parent)
+
+        dialog.geometry.assert_called_once_with("+0+0")
+
+
+class UtilityFunctionsTests(unittest.TestCase):
+    def test_system_user_returns_user(self):
+        with patch.object(mchpy.getpass, "getuser", return_value="Vera"):
+            self.assertEqual(mchpy._system_user(), "Vera")
+
+    def test_system_user_returns_fallback_on_error(self):
+        with patch.object(
+            mchpy.getpass,
+            "getuser",
+            side_effect=OSError,
+        ):
+            self.assertEqual(mchpy._system_user(), "user")
+
+    def test_safe_part_removes_invalid_characters(self):
+        self.assertEqual(mchpy._safe_part("Vera Smith!"), "VeraSmith")
+        self.assertEqual(mchpy._safe_part(""), "user")
+
+    def test_unit_label_extracts_short_label(self):
+        self.assertEqual(mchpy._unit_label("метр (м)"), "м")
+        self.assertEqual(mchpy._unit_label("килограмм"), "килограмм")
+
+    def test_read_json_returns_none_for_missing_file(self):
+        path = os.path.join(self.temp_dir.name, "missing.json")
+        self.assertIsNone(mchpy._read_json(path))
+
+    def test_write_json_returns_false_for_invalid_data(self):
+        path = os.path.join(self.temp_dir.name, "test.json")
+        self.assertFalse(mchpy._write_json(path, {1, 2, 3}))
+
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+
+    def tearDown(self):
+        self.temp_dir.cleanup()
+
+
+class AdditionalCoverageTests(unittest.TestCase):
+    def test_data_dir_windows_uses_appdata(self):
+        with (
+            patch.object(mchpy.platform, "system", return_value="Windows"),
+            patch.dict(mchpy.os.environ, {"APPDATA": "C:/Users/Vera/AppData/Roaming"}),
+        ):
+            self.assertEqual(
+                mchpy._data_dir(),
+                os.path.join("C:/Users/Vera/AppData/Roaming", "MCHPY"),
+            )
+
+    def test_data_dir_linux_uses_xdg(self):
+        with (
+            patch.object(mchpy.platform, "system", return_value="Linux"),
+            patch.dict(mchpy.os.environ, {"XDG_DATA_HOME": "/home/test/.data"}),
+        ):
+            self.assertEqual(
+                mchpy._data_dir(),
+                os.path.join("/home/test/.data", "MCHPY"),
+            )
+
+    def test_base_unit_name_finds_coefficient_one(self):
+        app = object.__new__(mchpy.MCHPYApp)
+        self.assertEqual(
+            app._base_unit_name({"сантиметр": 0.01, "метр": 1.0}),
+            "метр",
+        )
+
+    def test_base_unit_name_skips_invalid_coefficients(self):
+        app = object.__new__(mchpy.MCHPYApp)
+        self.assertEqual(
+            app._base_unit_name({"ошибка": "abc", "ноль": 0.5}),
+            "базовая единица",
+        )
+
+
+class TemperatureCoverageTests(unittest.TestCase):
+    def test_convert_temperature_celsius_to_celsius(self):
+        app = object.__new__(mchpy.MCHPYApp)
+        result = app.convert_temperature(Decimal("25"), "°C", "°C")
+        self.assertEqual(result, Decimal("25"))
+
+    def test_convert_temperature_celsius_to_fahrenheit(self):
+        app = object.__new__(mchpy.MCHPYApp)
+        result = app.convert_temperature(Decimal("0"), "°C", "°F")
+        self.assertEqual(result, Decimal("32"))
+
+
+class InterfaceBuilderTests(unittest.TestCase):
+    def setUp(self):
+        self.app = make_app()
+        self.app.root = MagicMock()
+
+    def test_build_top_bar(self):
+        with (
+            patch("mchpy.ttk.Frame") as frame,
+            patch("mchpy.ttk.Button") as button,
+        ):
+            self.app.clear_history = MagicMock()
+
+            self.app._build_top_bar()
+
+        frame.assert_called_once()
+        button.assert_called_once()
+        button.return_value.pack.assert_called_once_with(fill=mchpy.tk.X)
+
+    def test_build_history_frame(self):
+        with (
+            patch("mchpy.ttk.LabelFrame") as label_frame,
+            patch("mchpy.tk.Text") as text_widget,
+            patch("mchpy.ttk.Scrollbar") as scrollbar,
+        ):
+            self.app._build_history_frame()
+
+        label_frame.assert_called_once()
+        text_widget.assert_called_once()
+        scrollbar.assert_called_once()
+        text_widget.return_value.configure.assert_called_once()
+        text_widget.return_value.pack.assert_called_once()
+        scrollbar.return_value.pack.assert_called_once()
+
+    def test_build_controls_frame(self):
+        self.app.conversion_factors = {"Длина": {"units": {"метр": 1.0}}}
+        self.app.money_data = {"units": {"USD": 1.0}}
+        self.app.temperature_data = {"units": {"celsius": "Цельсий"}}
+
+        with (
+            patch("mchpy.ttk.Frame"),
+            patch("mchpy.ttk.Label"),
+            patch("mchpy.ttk.Combobox") as combo,
+            patch("mchpy.ttk.Entry"),
+            patch("mchpy.ttk.Button"),
+        ):
+            self.app._build_controls_frame()
+
+        self.assertEqual(combo.call_count, 3)
+        self.assertEqual(
+            self.app.category_combo.__setitem__.call_args,
+            unittest.mock.call(
+                "values",
+                ["Длина", "Валюта", "Температура"],
+            ),
+        )
+        self.app.category_combo.current.assert_called_once_with(0)
+
+
+class TemperatureMissingBranchesTests(unittest.TestCase):
+    def setUp(self):
+        self.app = make_app()
+
+    def test_celsius_to_fahrenheit(self):
+        result = self.app.convert_temperature(
+            Decimal("20"),
+            "Цельсий",
+            "Фаренгейт",
+        )
+
+        self.assertEqual(result, Decimal("68"))
+
+    def test_fahrenheit_to_celsius(self):
+        result = self.app.convert_temperature(
+            Decimal("68"),
+            "Фаренгейт",
+            "Цельсий",
+        )
+
+        self.assertEqual(result, Decimal("20"))
+
+    def test_celsius_to_kelvin(self):
+        app = make_app()
+
+        result = app.convert_temperature(
+            Decimal("20"),
+            "Цельсий",
+            "Кельвин",
+        )
+
+        self.assertEqual(result, Decimal("293.15"))
+
+
+class AppInitCoverageTests(unittest.TestCase):
+    def _run_init(self, makedirs_side_effect=None):
+        root = MagicMock()
+
+        with (
+            patch("mchpy._data_dir", return_value="test_history"),
+            patch("mchpy._system_user", return_value="test_user"),
+            patch("mchpy.os.makedirs", side_effect=makedirs_side_effect) as makedirs,
+            patch("mchpy.messagebox.showerror") as showerror,
+            patch.object(mchpy.MCHPYApp, "load_all_data"),
+            patch.object(mchpy.MCHPYApp, "ensure_history_file"),
+            patch.object(mchpy.MCHPYApp, "load_history"),
+            patch.object(mchpy.MCHPYApp, "_build_top_bar"),
+            patch.object(mchpy.MCHPYApp, "_build_history_frame"),
+            patch.object(mchpy.MCHPYApp, "_build_controls_frame"),
+            patch.object(mchpy.MCHPYApp, "_redraw_history"),
+            patch.object(mchpy.MCHPYApp, "update_units"),
+            patch("mchpy.threading.Thread") as thread,
+        ):
+            app = mchpy.MCHPYApp(root)
+
+        return app, root, makedirs, showerror, thread
+
+    def test_init_success(self):
+        app, root, makedirs, showerror, thread = self._run_init()
+
+        root.title.assert_called_once()
+        root.geometry.assert_called_once_with("450x600")
+        root.minsize.assert_called_once_with(450, 600)
+
+        makedirs.assert_called_once_with("test_history", exist_ok=True)
+        showerror.assert_not_called()
+
+        self.assertEqual(app.history_dir, "test_history")
+        self.assertEqual(
+            app.history_file, os.path.join("test_history", "history_test_user.txt")
+        )
+        self.assertEqual(app.history_lines, [])
+
+        thread.assert_called_once_with(
+            target=app._refresh_rates,
+            daemon=True,
+        )
+        thread.return_value.start.assert_called_once()
+
+    def test_init_directory_error(self):
+        app, root, makedirs, showerror, thread = self._run_init(OSError("Нет доступа"))
+
+        makedirs.assert_called_once()
+        showerror.assert_called_once()
+
+        self.assertEqual(app.history_dir, "test_history")
+        self.assertEqual(app.history_lines, [])
+
+        thread.return_value.start.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ---------------------------------------------------------------------------
+# Тесты графического диалога пользовательских единиц измерения
+# ---------------------------------------------------------------------------
+
+
+class FakeDialogVar:
+    """Минимальная имитация tkinter.StringVar с поддержкой trace_add."""
+
+    def __init__(self):
+        self.value = ""
+        self.callbacks = []
+
+    def get(self):
+        return self.value
+
+    def set(self, value):
+        self.value = value
+        for callback in self.callbacks:
+            callback()
+
+    def trace_add(self, mode, callback):
+        self.callbacks.append(callback)
+
+
+class FakeDialogWidget:
+    """Минимальная имитация виджетов ttk для тестирования без GUI."""
+
+    def __init__(self, master=None, **kwargs):
+        self.master = master
+        self.kwargs = kwargs
+        self.command = kwargs.get("command")
+        self.value = ""
+        self.visible = True
+
+    def pack(self, **kwargs):
+        return None
+
+    def grid(self, **kwargs):
+        self.visible = True
+
+    def grid_remove(self):
+        self.visible = False
+
+    def insert(self, index, value):
+        self.value = value
+
+    def get(self):
+        return self.value
+
+    def focus_set(self):
+        return None
+
+    def columnconfigure(self, *args, **kwargs):
+        return None
+
+    def grid_rowconfigure(self, *args, **kwargs):
+        return None
+
+
+class FakeCustomUnitDialog(FakeDialogWidget):
+    def __init__(self, master=None, **kwargs):
+        super().__init__(master, **kwargs)
+        self.bindings = {}
+        self.destroyed = False
+        self.window_title = None
+        self.window_geometry = None
+
+    def title(self, value):
+        self.window_title = value
+
+    def transient(self, parent):
+        return None
+
+    def grab_set(self):
+        return None
+
+    def resizable(self, *args):
+        return None
+
+    def bind(self, event, callback):
+        self.bindings[event] = callback
+
+    def destroy(self):
+        self.destroyed = True
+
+    def update_idletasks(self):
+        return None
+
+    def winfo_reqwidth(self):
+        return 200
+
+    def winfo_reqheight(self):
+        return 100
+
+    def geometry(self, value):
+        self.window_geometry = value
+
+
+class FakeDialogRoot:
+    def winfo_rootx(self):
+        return 100
+
+    def winfo_rooty(self):
+        return 100
+
+    def winfo_width(self):
+        return 500
+
+    def winfo_height(self):
+        return 400
+
+
+class AddCustomUnitDialogTests(unittest.TestCase):
+    def setUp(self):
+        self.app = make_app(
+            conversion={
+                "Длина": {
+                    "units": {
+                        "метр": 1.0,
+                        "километр": 1000.0,
+                    }
+                }
+            }
+        )
+        self.app.root = FakeDialogRoot()
+        self.app.category_combo = MagicMock()
+        self.app.category_combo.get.return_value = "Длина"
+        self.app._save_conversion_factors = MagicMock()
+        self.app._refresh_units_after = MagicMock()
+
+        self.dialog = FakeCustomUnitDialog()
+        self.variables = []
+        self.entries = []
+        self.buttons = {}
+
+        def make_var():
+            variable = FakeDialogVar()
+            self.variables.append(variable)
+            return variable
+
+        def make_entry(master=None, **kwargs):
+            entry = FakeDialogWidget(master, **kwargs)
+            self.entries.append(entry)
+            return entry
+
+        def make_button(master=None, **kwargs):
+            button = FakeDialogWidget(master, **kwargs)
+            self.buttons[kwargs["text"]] = button
+            return button
+
+        self.patches = [
+            patch("mchpy.tk.Toplevel", return_value=self.dialog),
+            patch("mchpy.tk.StringVar", side_effect=make_var),
+            patch("mchpy.ttk.Frame", FakeDialogWidget),
+            patch("mchpy.ttk.Label", FakeDialogWidget),
+            patch("mchpy.ttk.Entry", side_effect=make_entry),
+            patch("mchpy.ttk.Button", side_effect=make_button),
+        ]
+        for patcher in self.patches:
+            patcher.start()
+
+    def tearDown(self):
+        for patcher in reversed(self.patches):
+            patcher.stop()
+
+    def open_dialog(self):
+        self.app.add_custom_unit()
+        return self.variables[0], self.variables[1], self.variables[2]
+
+    def test_empty_category_returns_without_opening_dialog(self):
+        self.app.category_combo.get.return_value = ""
+
+        self.app.add_custom_unit()
+
+        self.assertIsNone(self.dialog.window_title)
+
+    def test_currency_category_is_rejected(self):
+        self.app.category_combo.get.return_value = self.app.MONEY_CAT
+
+        with patch("mchpy.messagebox.showinfo") as showinfo:
+            self.app.add_custom_unit()
+
+        showinfo.assert_called_once()
+        self.assertIsNone(self.dialog.window_title)
+
+    def test_temperature_category_is_rejected(self):
+        self.app.category_combo.get.return_value = self.app.TEMP_CAT
+
+        with patch("mchpy.messagebox.showinfo") as showinfo:
+            self.app.add_custom_unit()
+
+        showinfo.assert_called_once()
+        self.assertIsNone(self.dialog.window_title)
+
+    def test_dialog_is_created_with_controls_and_centered(self):
+        self.open_dialog()
+
+        self.assertEqual(self.dialog.window_title, "Единица — Длина")
+        self.assertEqual(self.dialog.window_geometry, "+250+250")
+        self.assertEqual(
+            set(self.buttons),
+            {"Удалить", "Отмена", "Сохранить"},
+        )
+        self.assertIn("<Return>", self.dialog.bindings)
+        self.assertIn("<Escape>", self.dialog.bindings)
+        self.assertEqual(self.entries[1].get(), "1")
+
+    def test_existing_unit_name_displays_update_hint_and_delete_button(self):
+        _, hint_var, _ = self.open_dialog()
+
+        self.variables[0].set("метр")
+
+        self.assertIn("уже существует", hint_var.get())
+        self.assertTrue(self.buttons["Удалить"].visible)
+
+    def test_new_unit_name_clears_hint_and_hides_delete_button(self):
+        _, hint_var, _ = self.open_dialog()
+        self.variables[0].set("метр")
+        self.variables[0].set("сантиметр")
+
+        self.assertEqual(hint_var.get(), "")
+        self.assertFalse(self.buttons["Удалить"].visible)
+
+    def test_invalid_name_is_shown_in_error_label(self):
+        _, _, error_var = self.open_dialog()
+
+        self.buttons["Сохранить"].command()
+
+        self.assertEqual(error_var.get(), "Введите название.")
+        self.assertFalse(self.dialog.destroyed)
+        self.app._refresh_units_after.assert_not_called()
+
+    def test_invalid_coefficient_is_shown_in_error_label(self):
+        _, _, error_var = self.open_dialog()
+        self.variables[0].set("сантиметр")
+        self.entries[1].value = "не число"
+
+        self.buttons["Сохранить"].command()
+
+        self.assertEqual(error_var.get(), "Коэффициент должен быть числом.")
+        self.assertFalse(self.dialog.destroyed)
+
+    def test_valid_new_unit_is_saved_and_dialog_is_closed(self):
+        self.open_dialog()
+        self.variables[0].set("сантиметр")
+        self.entries[1].value = "0.01"
+
+        with patch.object(self.app, "_save_custom_unit") as save_unit:
+            self.buttons["Сохранить"].command()
+
+        save_unit.assert_called_once_with("Длина", "сантиметр", Decimal("0.01"))
+        self.assertTrue(self.dialog.destroyed)
+        self.app._refresh_units_after.assert_called_once_with("Длина", "сантиметр")
+
+    def test_existing_unit_can_be_updated(self):
+        self.open_dialog()
+        self.variables[0].set("километр")
+        self.entries[1].value = "1500"
+
+        with patch.object(self.app, "_save_custom_unit") as save_unit:
+            self.buttons["Сохранить"].command()
+
+        save_unit.assert_called_once_with("Длина", "километр", Decimal("1500"))
+        self.assertTrue(self.dialog.destroyed)
+
+    def test_cancel_button_closes_dialog(self):
+        self.open_dialog()
+
+        self.buttons["Отмена"].command()
+
+        self.assertTrue(self.dialog.destroyed)
+
+    def test_escape_key_closes_dialog(self):
+        self.open_dialog()
+
+        self.dialog.bindings["<Escape>"](None)
+
+        self.assertTrue(self.dialog.destroyed)
+
+    def test_return_key_invokes_save_callback(self):
+        self.open_dialog()
+        self.variables[0].set("сантиметр")
+        self.entries[1].value = "0.01"
+
+        with patch.object(self.app, "_save_custom_unit") as save_unit:
+            self.dialog.bindings["<Return>"](None)
+
+        save_unit.assert_called_once_with("Длина", "сантиметр", Decimal("0.01"))
+
+    def test_delete_callback_does_nothing_for_unknown_unit(self):
+        self.open_dialog()
+        self.variables[0].set("несуществующая")
+
+        with patch("mchpy.messagebox.askyesno") as askyesno:
+            self.buttons["Удалить"].command()
+
+        askyesno.assert_not_called()
+        self.assertFalse(self.dialog.destroyed)
+
+    def test_delete_can_be_cancelled(self):
+        self.open_dialog()
+        self.variables[0].set("километр")
+
+        with (
+            patch("mchpy.messagebox.askyesno", return_value=False) as askyesno,
+            patch.object(self.app, "_delete_custom_unit") as delete_unit,
+        ):
+            self.buttons["Удалить"].command()
+
+        askyesno.assert_called_once()
+        delete_unit.assert_not_called()
+        self.assertFalse(self.dialog.destroyed)
+
+    def test_failed_delete_displays_warning(self):
+        self.open_dialog()
+        self.variables[0].set("километр")
+
+        with (
+            patch("mchpy.messagebox.askyesno", return_value=True),
+            patch.object(self.app, "_delete_custom_unit", return_value=False),
+            patch("mchpy.messagebox.showwarning") as showwarning,
+        ):
+            self.buttons["Удалить"].command()
+
+        showwarning.assert_called_once()
+        self.assertFalse(self.dialog.destroyed)
+
+    def test_successful_delete_closes_dialog_and_refreshes_units(self):
+        self.open_dialog()
+        self.variables[0].set("километр")
+
+        with (
+            patch("mchpy.messagebox.askyesno", return_value=True),
+            patch.object(
+                self.app, "_delete_custom_unit", return_value=True
+            ) as delete_unit,
+        ):
+            self.buttons["Удалить"].command()
+
+        delete_unit.assert_called_once_with("Длина", "километр")
+        self.assertTrue(self.dialog.destroyed)
+        self.app._refresh_units_after.assert_called_once_with("Длина")
+
+
+class MainEntryPointCoverageTests(unittest.TestCase):
+    def test_main_entry_point_creates_window_app_and_starts_loop(self):
+        """Проверяет три строки точки входа без запуска настоящего GUI."""
+        import ast
+
+        source_path = mchpy.__file__
+        source = Path(source_path).read_text(encoding="utf-8")
+        syntax_tree = ast.parse(source)
+
+        main_guard = next(
+            node
+            for node in syntax_tree.body
+            if isinstance(node, ast.If)
+            and isinstance(node.test, ast.Compare)
+            and isinstance(node.test.left, ast.Name)
+            and node.test.left.id == "__name__"
+            and len(node.test.comparators) == 1
+            and isinstance(node.test.comparators[0], ast.Constant)
+            and node.test.comparators[0].value == "__main__"
+        )
+
+        main_module = ast.Module(body=[main_guard], type_ignores=[])
+        code = compile(
+            ast.fix_missing_locations(main_module),
+            source_path,
+            "exec",
+        )
+
+        fake_root = MagicMock()
+        fake_tk = MagicMock()
+        fake_tk.Tk.return_value = fake_root
+        fake_app_class = MagicMock()
+
+        exec(
+            code,
+            {
+                "__name__": "__main__",
+                "tk": fake_tk,
+                "MCHPYApp": fake_app_class,
+            },
+        )
+
+        fake_tk.Tk.assert_called_once_with()
+        fake_app_class.assert_called_once_with(fake_root)
+        fake_root.mainloop.assert_called_once_with()

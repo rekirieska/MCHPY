@@ -177,35 +177,75 @@ class MCHPYApp:
         )
 
     def load_all_data(self):
-        """Загружает локальные файлы коэффициентов"""
+        """Загружает локальные файлы коэффициентов."""
         self.conversion_factors = {}
         self.money_data = {}
         self.temperature_data = {}
 
         cache = _read_json(os.path.join(self.base_dir, self.RATES_CACHE_FILENAME))
 
-        if cache and cache.get("data", {}).get("units"):
-            self.money_data = cache["data"]
+        if isinstance(cache, dict):
+            cached_data = cache.get("data")
+            if (
+                isinstance(cached_data, dict)
+                and isinstance(cached_data.get("units"), dict)
+                and cached_data["units"]
+            ):
+                self.money_data = cached_data
 
         targets = [
             ("conversion.json", "conversion_factors"),
             ("temperature.json", "temperature_data"),
         ]
+
         if not self.money_data.get("units"):
             targets.append(("money.json", "money_data"))
 
         for filename, attr in targets:
             path = os.path.join(self.base_dir, filename)
             data = _read_json(path)
-            if data is not None:
-                setattr(self, attr, data)
-            elif os.path.exists(path):
-                messagebox.showerror("Ошибка", f"Не удалось прочитать файл {filename}")
-            else:
+
+            if data is None:
+                if os.path.exists(path):
+                    messagebox.showerror(
+                        "Ошибка",
+                        f"Не удалось прочитать файл {filename}",
+                    )
+                else:
+                    messagebox.showerror(
+                        "Критическая ошибка",
+                        f"Файл '{filename}' не найден!\nОжидаемый путь:\n{path}",
+                    )
+                continue
+
+            if not isinstance(data, dict):
                 messagebox.showerror(
-                    "Критическая ошибка",
-                    f"Файл '{filename}' не найден!\nОжидаемый путь:\n{path}",
+                    "Ошибка",
+                    f"Некорректная структура файла {filename}",
                 )
+                continue
+
+            if filename == "conversion.json":
+                valid_structure = all(
+                    isinstance(category_data, dict)
+                    and isinstance(category_data.get("units"), dict)
+                    for category_data in data.values()
+                )
+
+            elif filename == "temperature.json":
+                valid_structure = isinstance(data.get("units"), dict)
+
+            else:
+                valid_structure = isinstance(data.get("units"), dict)
+
+            if not valid_structure:
+                messagebox.showerror(
+                    "Ошибка",
+                    f"Некорректная структура файла {filename}",
+                )
+                continue
+
+            setattr(self, attr, data)
 
     def _refresh_rates(self):
         """Обновление курсов валют"""
