@@ -421,16 +421,16 @@ pre-commit install
 интерфейса.
 
 ### Главное окно
-
+![no_history](no-history.png)
 
 
 ### История конвертаций
-
+![history](history.png)
 
 
 ### Пользовательские единицы измерения
-
-
+![new](new.png)
+![newsim](new_sum.png)
 
 ## Ограничения
 
