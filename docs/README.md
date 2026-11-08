@@ -430,8 +430,7 @@ pre-commit install
 
 ### Пользовательские единицы измерения
 ![new](new.png)
-
-![new_sim](new_sum.png)
+![new_sim](new_sim.png)
 
 ## Ограничения
 
